@@ -1,0 +1,41 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ragnarok</title>
+<style>
+:root{--bg:#0f1115;--fg:#e8e6e3;--mut:#8b8f98;--card:#171a21;--acc:#c9a227;--bad:#d9534f;--ok:#4caf7a;--bd:#262b36}
+@media(prefers-color-scheme:light){:root{--bg:#f6f4ef;--fg:#1c1c1c;--mut:#666;--card:#fff;--bd:#ddd}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif}
+main{max-width:980px;margin:0 auto;padding:16px}h1{margin:.2em 0}h2{font-size:1rem;color:var(--acc);text-transform:uppercase;letter-spacing:.06em}
+section{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px;margin:14px 0}
+input,textarea,button{font:inherit;color:inherit;background:transparent;border:1px solid var(--bd);border-radius:6px;padding:6px 10px}
+button{cursor:pointer}button:hover{border-color:var(--acc)}button.d{color:var(--bad)}button.g{color:var(--ok)}
+.row{display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--bd)}.row input{flex:1}
+.m{color:var(--mut);font-size:.85em}#chat{max-height:260px;overflow:auto}.u{color:var(--acc)}pre{white-space:pre-wrap;margin:0;font-size:.82em}
+</style></head><body><main>
+<h1>ᚱ Ragnarok</h1><p class="m">Everything here lives on this machine. You control the memory.</p>
+<section><h2>Chat</h2><div id="chat"></div><div class="row"><input id="msg" placeholder="Say something…"><button onclick="send()">Send</button></div></section>
+<section><h2>Pending approvals</h2><div id="appr" class="m">none</div></section>
+<section><h2>Memory</h2>
+<div class="row"><input id="newf" placeholder="Add a fact…"><button onclick="addf()">Add</button>
+<button onclick="exp()">Export</button><button class="d" onclick="wipe()">Wipe all</button></div><div id="facts"></div></section>
+<section><h2>Execution log</h2><pre id="log" class="m"></pre></section>
+</main><script>
+const T="__TOKEN__",H={"X-Ragnarok-Token":T,"Content-Type":"application/json"};
+const api=(p,m="GET",b)=>fetch("/api/"+p,{method:m,headers:H,body:b?JSON.stringify(b):undefined}).then(r=>r.json());
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+async function load(){
+ const m=await api("memory");
+ facts.innerHTML=m.facts.map(f=>`<div class="row"><span class="m">#${f.id}</span><input id="f${f.id}" value="${esc(f.text)}"><button onclick="save(${f.id})">Save</button><button class="d" onclick="del(${f.id})">Delete</button></div>`).join("")||'<p class="m">No memories yet.</p>';
+ const a=await api("approvals");
+ appr.innerHTML=a.length?a.map(x=>`<div class="row"><b>${esc(x.skill)}</b><code>${esc(JSON.stringify(x.args))}</code><button class="g" onclick="act('${x.id}','grant')">Approve</button><button class="d" onclick="act('${x.id}','reject')">Reject</button></div>`).join(""):"none";
+ const l=await api("log");log.textContent=l.slice(-25).map(e=>new Date(e.ts*1000).toLocaleTimeString()+" "+e.event+" "+JSON.stringify(Object.fromEntries(Object.entries(e).filter(([k])=>!["ts","event"].includes(k)))).slice(0,160)).join("\n");
+}
+async function send(){const t=msg.value.trim();if(!t)return;msg.value="";chat.innerHTML+=`<div><span class="u">you</span> ${esc(t)}</div>`;
+ const r=await api("chat","POST",{text:t});chat.innerHTML+=`<div><b>ragnarok</b> ${esc(r.reply||r.error)}</div>`;chat.scrollTop=1e9;load()}
+const save=id=>api("memory/"+id,"PUT",{text:document.getElementById("f"+id).value}).then(load);
+const del=id=>confirm("Delete permanently?")&&api("memory/"+id,"DELETE").then(load);
+const addf=()=>newf.value&&api("memory","POST",{text:newf.value}).then(()=>{newf.value="";load()});
+const act=(id,a)=>api("approvals/"+id+"/"+a,"POST",{}).then(load);
+const wipe=()=>prompt("Type WIPE to erase all memory")==="WIPE"&&api("wipe","POST",{confirm:"WIPE"}).then(load);
+async function exp(){const m=await api("memory");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(m,null,2)],{type:"application/json"}));a.download="ragnarok-memory.json";a.click()}
+msg.addEventListener("keydown",e=>e.key==="Enter"&&send());load();setInterval(load,15000);
+</script></body></html>

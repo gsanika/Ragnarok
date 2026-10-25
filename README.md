@@ -1,86 +1,99 @@
-# Ragnarok
+# ᚱ Ragnarok
 
-**A sovereign, always-on personal AI agent: privacy-preserving autonomous workflows with persistent memory, running fully local on an Ollama stack.**
+**A sovereign, always-on personal AI agent that runs entirely on your machine.**
+Every model call goes to a local [Ollama](https://ollama.com) server. No cloud AI, no API keys, no data leaving your laptop.
 
-> No cloud AI service. No API key. Nothing leaves your machine.
+Persistent encrypted memory · reusable skills · multi-step planning with self-correction · background triggers · you approve every risky action.
 
----
+> Full research proposal and requirements: [docs/PROPOSAL.md](docs/PROPOSAL.md)
 
-## Context
+## Quick start
 
-Commercial AI assistants are cloud-dependent and centralized. Personal data, conversation context and workflow habits are collected by third-party providers. Most are stateless or limited to a context window, so they cannot personalize over the long term and behave as reactive chatbots instead of proactive agents that carry out multi-step tasks.
+```bash
+ollama pull llama3.1:8b          # chat + tool calling
+ollama pull nomic-embed-text     # embeddings for memory
+pip install -e ".[fast]"         # numpy is optional but speeds up recall
 
-Small open models now run on an ordinary laptop through [Ollama](https://ollama.com), which serves chat, embeddings and tool calling on a local address. A capable agent can live entirely on the user's own machine.
+ragnarok                         # interactive chat
+ragnarok do "plan my study week and save it as a note"
+ragnarok daemon                  # always-on: triggers, morning brief, memory maintenance
+ragnarok ui                      # local web UI: memory, approvals, chat, log
+ragnarok memory list|add|edit|delete|export|consolidate|forget|wipe
+ragnarok approvals list|grant|reject
+ragnarok bench                   # check the non-functional requirements
+```
 
-## Problem Statement
+Options: `--role viewer|assistant|admin`, `--offline-embeddings` (no Ollama needed for embeddings).
+Env: `OLLAMA_URL`, `RAGNAROK_CHAT_MODEL`, `RAGNAROK_EMBED_MODEL`, `RAGNAROK_HOME` (data dir),
+`RAGNAROK_PASSPHRASE` (derive the memory key from a passphrase; otherwise a key file is created),
+`IMAP_HOST/IMAP_USER/IMAP_PASSWORD`, `SMTP_HOST/SMTP_USER/SMTP_PASSWORD` (optional email).
 
-There is a gap between agent autonomy and user data sovereignty. Today's assistants fail on three fronts:
+## Architecture
 
-1. **Loss of data sovereignty:** users don't own or control the data that personalizes their assistant.
-2. **Contextual amnesia:** no robust persistent memory, so preferences, history and project state must be re-explained.
-3. **Siloed, ephemeral execution:** isolated single-turn interactions, with no reusable skill framework or orchestration across real workflows (email triage → calendar scheduling → code generation).
+```
+            ┌────────────── triggers (cron-like, file, email) ──────────────┐
+            ▼                                                                │
+ CLI / Web UI ─► Runtime ─► Agent loop ─► skill router ─► Skills ─► sandbox  │
+                    │          │  ▲            (intent)      │                │
+                    │          │  └─ memory recall            └─ RBAC + approvals
+                    │          ▼
+                    │     Ollama (localhost only)
+                    ├─► Planner/Orchestrator (task graph, reflect, retry, checkpoint)
+                    └─► Encrypted memory (episodic log + semantic facts)
+```
 
-## Research Objective
+| Module | Role |
+|---|---|
+| `llm.py` | Ollama client (chat, tool calling, embeddings) |
+| `memory/` | Encrypted SQLite store, recall, dedupe, consolidation, forgetting |
+| `crypto.py` | Field-level authenticated encryption with a user-held key |
+| `skills.py`, `builtin_skills.py`, `integrations.py` | Skill registry; notes, calendar, email, calculator, sandboxed Python |
+| `intent.py` | Embedding-based skill shortlist |
+| `agent.py` | Tool-calling loop, memory injection, state checkpointing |
+| `planner.py` | Goal → task graph, reflection, retry, skip-on-failure, resume after crash |
+| `sandbox.py` | Process rlimits (or Docker with no network) for untrusted code |
+| `permissions.py` | Role-based access control and one-shot approvals |
+| `triggers.py`, `proactive.py` | Always-on sentinel, daily brief |
+| `server.py`, `ui.html` | Local-only web UI and API |
+| `bench.py` | NFR benchmarks |
 
-Design, build and evaluate a local, privacy-preserving, always-on personal AI agent where **every model call goes to a local Ollama instance**. It must keep all data on the user's machine, remember past interactions, use reusable skills and carry out multi-step tasks on its own.
+## Requirements traceability
 
----
+| Req | Where | Verified by |
+|---|---|---|
+| FR1.1 episodic memory | `memory/store.py` episodes | `test_memory.py` |
+| FR1.2 semantic memory | facts + embeddings, `recall()` | `test_recall_finds_relevant`, dedupe test |
+| FR1.3 consolidation & forgetting | `consolidate()`, `forget()` | `test_consolidation_and_forgetting` |
+| FR2.1 skill registration | `SkillRegistry.register` | `test_agent.py` |
+| FR2.2 dynamic tool selection | LLM tool calling + `SkillRouter` | `test_runtime.py` |
+| FR2.3 sandboxed execution | `sandbox.py` | `test_planner_sandbox.py` |
+| FR3.1 multi-step planning | `planner.make_plan` | `test_goal_plan_executes_end_to_end` |
+| FR3.2 integrations | `integrations.py` (notes, calendar, email) | `test_always_on.py` |
+| FR3.3 self-correction | `reflect()` + retry loop | `test_retry_then_succeed` |
+| FR4.1 always-on triggers | `triggers.py`, `ragnarok daemon` | `test_daemon_brief_and_file_trigger` |
+| FR4.2 proactivity | `proactive.morning_brief` | `test_morning_brief_offline` |
+| NFR1.1 local-first | only `localhost` Ollama; data in `data/` | by design |
+| NFR1.2 encryption at rest | `crypto.py` | `test_data_encrypted_at_rest`, `test_wrong_key_fails` |
+| NFR1.3 local inference | no external LLM client exists | by design |
+| NFR2.1 < 800 ms | `bench.py` | `test_benchmarks_meet_nfr_targets` |
+| NFR2.2 < 30% CPU | `bench.py` (background share) | see note below |
+| NFR3.1 graceful degradation | tool errors caught, dependents skipped | `test_failure_skips_dependents...` |
+| NFR3.2 recovery < 5 s | `state.json`, plan checkpoints | `test_state_recovery`, bench |
+| NFR4.1 explainability | `execution_log.jsonl`, UI log panel | `test_runtime.py` |
+| NFR4.2 memory control | CLI, UI, API (view/edit/export/delete/wipe) | `test_ui_api_requires_token...` |
+| NFR4.3 RBAC + approvals | `permissions.py` | `test_rbac`, `test_approvals_one_shot` |
 
-## Functional Requirements
+## Honest limitations
 
-### FR1: Persistent Memory
-| ID | Requirement |
-|----|-------------|
-| FR1.1 | **Episodic memory:** chronological log of interactions, tasks and events, enabling recall of specific past occurrences. |
-| FR1.2 | **Semantic memory:** extract, store and retrieve preferences and facts in a structured form (vector embeddings or knowledge graph). |
-| FR1.3 | **Consolidation & forgetting:** consolidate working memory into long-term storage and prune obsolete or irrelevant data. |
+- **Encryption** is field-level (Fernet/AES) on content and embeddings; ids, timestamps and scores stay in plaintext. Use full-disk encryption too. Swap in SQLCipher if you need whole-file encryption.
+- **Process sandbox** limits CPU, memory, files and processes but does *not* block network access. Use Docker (auto-detected) for untrusted code. `run_python` is disabled for the `assistant` role and needs approval.
+- **NFR2.2**: the bench measures the always-on background cost. Model inference load depends on your hardware and model; measure with `ragnarok bench --ollama` plus your system monitor.
+- Retrieval latency in the bench uses the offline hash embedder; real embeddings add one Ollama round trip (~tens of ms for `nomic-embed-text`).
+- Small local models can pick tools poorly. The skill router and reflection loop reduce this but don't remove it.
+- Not yet verified against a live Ollama server in CI; the test suite uses scripted fake models.
 
-### FR2: Modular Skills and Tools
-| ID | Requirement |
-|----|-------------|
-| FR2.1 | **Skill registration:** define, register and manage reusable skills (Python scripts, API wrappers, local CLI commands) through a standard interface. |
-| FR2.2 | **Dynamic tool selection:** analyze intent, choose the right combination of skills and generate their parameters. |
-| FR2.3 | **Sandboxed execution:** run skills in isolated environments so bad code can't compromise the host. |
+## Development
 
-### FR3: Autonomous Workflow Orchestration
-| ID | Requirement |
-|----|-------------|
-| FR3.1 | **Multi-step planning:** decompose ambiguous goals into an execution graph of sub-tasks. |
-| FR3.2 | **Cross-application integration:** interact with user-approved apps (email, IDEs, project management). |
-| FR3.3 | **Self-correction and reflection:** evaluate skill output against expected criteria, retry or re-plan on failure. |
-
-### FR4: Proactive and Continuous Interaction
-| ID | Requirement |
-|----|-------------|
-| FR4.1 | **Always-on processing:** monitor user-defined triggers (incoming email, file changes, cron) and start tasks unprompted. |
-| FR4.2 | **Contextual proactivity:** use memory and current context to suggest actions or surface relevant information. |
-
-## Non-Functional Requirements
-
-### NFR1: Privacy and Data Sovereignty
-- **NFR1.1 Local-first:** all raw data, memory stores and execution logs stay on the user's hardware. Zero raw data goes to external servers.
-- **NFR1.2 Encrypted memory at rest:** the memory database is encrypted with user-held keys.
-- **NFR1.3 Fully local inference:** all reasoning and embedding calls are served by local Ollama models; no external LLM API. Since no prompt leaves the machine, no PII-redaction pipeline is needed.
-
-### NFR2: Performance and Resource Efficiency
-- **NFR2.1 Responsiveness:** under 800 ms for memory retrieval and intent classification.
-- **NFR2.2 Resource footprint:** background monitoring and local inference use no more than 30% of baseline CPU/GPU.
-
-### NFR3: Reliability and Fault Tolerance
-- **NFR3.1 Graceful degradation:** if a tool or API fails, halt that sub-task, notify the user and continue independent sub-tasks.
-- **NFR3.2 State recovery:** restore exact operational state (incomplete task graphs, working memory) within 5 seconds of reboot after a crash or power loss.
-
-### NFR4: Usability and Transparency
-- **NFR4.1 Explainability:** a transparent execution log / chain of thought showing why a tool was chosen and how a decision was made.
-- **NFR4.2 User control over memory:** view, edit, export and permanently delete specific memories.
-- **NFR4.3 Permission granularity:** strict role-based access control with explicit just-in-time approval before sensitive or high-risk actions (sending email, deleting files).
-
----
-
-## Conclusion
-
-Ragnarok proposes a shift from centralized, stateless chatbots to decentralized, stateful, sovereign agents. By running every model, memory store and skill locally through Ollama, and meeting the requirements above, this project aims to establish a foundation for an always-on personal assistant that boosts productivity through persistent memory and autonomous workflows, without giving up privacy or user control.
-
-## Status
-
-Research proposal stage. Architecture, implementation and evaluation to follow.
+```bash
+pip install -e ".[dev,fast]" && pytest
+```

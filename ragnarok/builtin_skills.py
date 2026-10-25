@@ -40,3 +40,11 @@ def list_workspace(subdir: str = ".") -> str:
     if base not in target.parents and target != base:
         raise PermissionError("outside workspace")
     return "\n".join(sorted(p.name for p in target.iterdir())) or "(empty)"
+
+
+from .sandbox import run_python as _sandbox_run  # noqa: E402
+
+
+@registry.register(name="run_python", description="Run a short Python snippet in an isolated sandbox and return its printed output.", risky=True)
+def run_python(code: str) -> str:
+    return _sandbox_run(code).text()

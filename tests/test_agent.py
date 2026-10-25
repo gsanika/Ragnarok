@@ -58,3 +58,30 @@ def test_risky_skill_needs_approval(tmp_path):
 def test_schema_from_signature():
     s = registry.get("list_workspace").schema()["function"]["parameters"]
     assert s["properties"]["subdir"]["type"] == "string" and s["required"] == []
+
+
+def test_memory_is_injected_and_extracted(tmp_path):
+    from ragnarok.memory import HashEmbedder, MemoryManager, MemoryStore
+    store = MemoryStore(tmp_path)
+    mem = MemoryManager(store, HashEmbedder())
+    mem.remember("User prefers answers in bullet points")
+    seen = {}
+
+    class Spy(FakeLLM):
+        def chat(self, messages, tools=None):
+            seen.setdefault("msgs", messages)
+            return super().chat(messages, tools)
+
+    llm = Spy([{"role": "assistant", "content": "ok"}, {"role": "assistant", "content": '["User is a student"]'}])
+    a = Agent(llm, registry, Config(data_dir=tmp_path), memory=mem)
+    a.run("how should answers be formatted? bullet points?")
+    assert any("bullet points" in m["content"] for m in seen["msgs"] if m["role"] == "system")
+    assert any("student" in f.text for f in mem.store.facts())
+    assert len(mem.store.episodes()) == 2
+
+
+def test_state_recovery(tmp_path):
+    a = make(tmp_path, [{"role": "assistant", "content": "hi"}])
+    a.run("hello")
+    b = Agent(FakeLLM([]), registry, Config(data_dir=tmp_path), restore=True)
+    assert any(m.get("content") == "hello" for m in b.history)
