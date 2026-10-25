@@ -9,7 +9,8 @@ from pathlib import Path
 
 DEFAULT_ROLES = {
     "viewer": {"allow": ["get_time", "calculate", "recall", "search_history", "list_workspace",
-                         "read_note", "list_events", "list_notes"], "deny": []},
+                         "read_note", "list_events", "list_notes", "list_tasks", "list_project",
+                         "read_project_file", "search_project", "git_status"], "deny": []},
     "assistant": {"allow": ["*"], "deny": ["run_python"]},
     "admin": {"allow": ["*"], "deny": []},
 }

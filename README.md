@@ -91,6 +91,20 @@ Env: `OLLAMA_URL`, `RAGNAROK_CHAT_MODEL`, `RAGNAROK_EMBED_MODEL`, `RAGNAROK_HOME
 | NFR3.1 bad model output | tool args coerced/validated, Ollama errors become one-line messages | `test_hardening.py` |
 | NFR4.3 RBAC + approvals | `permissions.py` | `test_rbac`, `test_approvals_one_shot` |
 
+## Integrations (FR3.2)
+
+All run locally; nothing is sent anywhere except to your own mail server.
+
+| Area | Skills | Setup |
+|---|---|---|
+| Email | `check_email` (headers only, never marks read), `send_email` (needs approval); email trigger in daemon mode | `IMAP_HOST/USER/PASSWORD` (+`IMAP_PORT`), `SMTP_HOST/USER/PASSWORD` (+`SMTP_PORT`: 465 = TLS, 587 = STARTTLS). Gmail/Outlook need an *app password*. |
+| Calendar | `add_event`, `list_events`, `export_calendar`, `import_calendar` (.ics, so Google/Outlook/Apple can exchange files) | none (stored in `data/calendar.json`) |
+| Tasks / project management | `add_task`, `list_tasks`, `complete_task` | none (`data/tasks.json`) |
+| IDE / code projects (read-only) | `list_project`, `read_project_file`, `search_project`, `git_status` | `RAGNAROK_PROJECTS=/path/a:/path/b` (`;` on Windows). Nothing outside these folders is readable. |
+| Notes | `write_note`, `read_note`, `list_notes`, `delete_note` (approval) | none |
+
+**Safety:** text arriving from outsiders (email subjects, files dropped in `data/inbox/`) is quoted as data and handled under the read-only `viewer` role, so a malicious email can't make the agent send mail or delete anything.
+
 ## Honest limitations
 
 - **Encryption** is field-level (Fernet/AES) on content and embeddings; ids, timestamps and scores stay in plaintext. Use full-disk encryption too. Swap in SQLCipher if you need whole-file encryption.
@@ -99,6 +113,7 @@ Env: `OLLAMA_URL`, `RAGNAROK_CHAT_MODEL`, `RAGNAROK_EMBED_MODEL`, `RAGNAROK_HOME
 - Retrieval latency in the bench uses the offline hash embedder; real embeddings add one Ollama round trip (~tens of ms for `nomic-embed-text`).
 - Small local models can pick tools poorly. The skill router and reflection loop reduce this but don't remove it.
 - The default test suite uses scripted fake models. `tests/test_live_ollama.py` runs a real end-to-end check automatically when Ollama and the default models are available (`ragnarok doctor` tells you). It has not been run by the author yet.
+- Integrations are tested with fake mail servers, not real Gmail/Outlook. Calendar sync is file-based (.ics); live Google/Outlook sync would need cloud OAuth, which conflicts with the local-first goal.
 - Switching embedding models re-embeds all stored facts automatically on next start.
 
 ## Development
