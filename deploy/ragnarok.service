@@ -1,0 +1,17 @@
+# Always-on on Linux (systemd user service):
+#   cp deploy/ragnarok.service ~/.config/systemd/user/ && systemctl --user enable --now ragnarok
+[Unit]
+Description=Ragnarok personal AI agent (local, always-on)
+After=network.target
+
+[Service]
+ExecStart=%h/.local/bin/ragnarok daemon --ui
+Environment=RAGNAROK_HOME=%h/.ragnarok
+# Environment=RAGNAROK_PASSPHRASE=...   (prefer an EnvironmentFile with mode 600)
+Restart=on-failure
+RestartSec=5
+Nice=10
+CPUQuota=30%
+
+[Install]
+WantedBy=default.target

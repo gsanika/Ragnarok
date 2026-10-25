@@ -16,6 +16,7 @@ class HashEmbedder:
 
     def __init__(self, dim: int = 256):
         self.dim = dim
+        self.name = f"hash{dim}"
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         out = []

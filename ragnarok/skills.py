@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -29,6 +30,32 @@ class Skill:
                 "parameters": {"type": "object", "properties": props, "required": required},
             },
         }
+
+
+def _coerce(value, typ):
+    if typ is bool and isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "y")
+    if typ in (int, float, str) and not isinstance(value, typ):
+        return typ(value)
+    return value
+
+
+def normalize_args(skill: "Skill", args) -> dict:
+    """Local models often send arguments as a JSON string or with wrong scalar types."""
+    if isinstance(args, str):
+        args = json.loads(args) if args.strip() else {}
+    if not isinstance(args, dict):
+        raise ValueError("arguments must be an object")
+    params = inspect.signature(skill.func).parameters
+    out = {}
+    for k, v in args.items():
+        if k not in params:
+            continue                      # ignore hallucinated parameters
+        out[k] = _coerce(v, params[k].annotation)
+    missing = [n for n, p in params.items() if p.default is inspect.Parameter.empty and n not in out]
+    if missing:
+        raise ValueError(f"missing required argument(s): {', '.join(missing)}")
+    return out
 
 
 class SkillRegistry:

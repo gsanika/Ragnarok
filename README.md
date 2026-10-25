@@ -14,10 +14,11 @@ ollama pull llama3.1:8b          # chat + tool calling
 ollama pull nomic-embed-text     # embeddings for memory
 pip install -e ".[fast]"         # numpy is optional but speeds up recall
 
+ragnarok doctor                  # check Ollama, models, key file, sandbox
 ragnarok                         # interactive chat
 ragnarok do "plan my study week and save it as a note"
-ragnarok daemon                  # always-on: triggers, morning brief, memory maintenance
-ragnarok ui                      # local web UI: memory, approvals, chat, log
+ragnarok daemon --ui             # always-on: triggers, morning brief, maintenance + web UI
+ragnarok ui                      # web UI only: memory, approvals, chat, log
 ragnarok memory list|add|edit|delete|export|consolidate|forget|wipe
 ragnarok approvals list|grant|reject
 ragnarok bench                   # check the non-functional requirements
@@ -27,6 +28,12 @@ Options: `--role viewer|assistant|admin`, `--offline-embeddings` (no Ollama need
 Env: `OLLAMA_URL`, `RAGNAROK_CHAT_MODEL`, `RAGNAROK_EMBED_MODEL`, `RAGNAROK_HOME` (data dir),
 `RAGNAROK_PASSPHRASE` (derive the memory key from a passphrase; otherwise a key file is created),
 `IMAP_HOST/IMAP_USER/IMAP_PASSWORD`, `SMTP_HOST/SMTP_USER/SMTP_PASSWORD` (optional email).
+
+### Run it always-on
+
+- **Linux:** `cp deploy/ragnarok.service ~/.config/systemd/user/ && systemctl --user enable --now ragnarok` (capped at 30% CPU).
+- **Docker:** `docker build -t ragnarok . && docker run -d -v ragnarok-data:/data -p 127.0.0.1:8765:8765 ragnarok` (reaches host Ollama via `host.docker.internal`).
+- The UI link with its per-run token is printed at startup. Notifications go to `data/notifications.jsonl`.
 
 ## Architecture
 
@@ -81,6 +88,7 @@ Env: `OLLAMA_URL`, `RAGNAROK_CHAT_MODEL`, `RAGNAROK_EMBED_MODEL`, `RAGNAROK_HOME
 | NFR3.2 recovery < 5 s | `state.json`, plan checkpoints | `test_state_recovery`, bench |
 | NFR4.1 explainability | `execution_log.jsonl`, UI log panel | `test_runtime.py` |
 | NFR4.2 memory control | CLI, UI, API (view/edit/export/delete/wipe) | `test_ui_api_requires_token...` |
+| NFR3.1 bad model output | tool args coerced/validated, Ollama errors become one-line messages | `test_hardening.py` |
 | NFR4.3 RBAC + approvals | `permissions.py` | `test_rbac`, `test_approvals_one_shot` |
 
 ## Honest limitations
@@ -90,7 +98,8 @@ Env: `OLLAMA_URL`, `RAGNAROK_CHAT_MODEL`, `RAGNAROK_EMBED_MODEL`, `RAGNAROK_HOME
 - **NFR2.2**: the bench measures the always-on background cost. Model inference load depends on your hardware and model; measure with `ragnarok bench --ollama` plus your system monitor.
 - Retrieval latency in the bench uses the offline hash embedder; real embeddings add one Ollama round trip (~tens of ms for `nomic-embed-text`).
 - Small local models can pick tools poorly. The skill router and reflection loop reduce this but don't remove it.
-- Not yet verified against a live Ollama server in CI; the test suite uses scripted fake models.
+- The default test suite uses scripted fake models. `tests/test_live_ollama.py` runs a real end-to-end check automatically when Ollama and the default models are available (`ragnarok doctor` tells you). It has not been run by the author yet.
+- Switching embedding models re-embeds all stored facts automatically on next start.
 
 ## Development
 

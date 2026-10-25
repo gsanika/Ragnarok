@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import threading
 import time
 from typing import Callable
 
@@ -39,6 +40,14 @@ def parse_json_list(text: str) -> list[str]:
     return [s.strip() for s in data if isinstance(s, str) and s.strip()]
 
 
+def _locked(fn):
+    def wrapper(self, *a, **kw):
+        with self._lock:
+            return fn(self, *a, **kw)
+    wrapper.__name__ = fn.__name__; wrapper.__doc__ = fn.__doc__
+    return wrapper
+
+
 class MemoryManager:
     def __init__(self, store: MemoryStore, embedder: Embedder, clock: Callable[[], float] = time.time,
                  dedupe_threshold: float = 0.92):
@@ -47,6 +56,25 @@ class MemoryManager:
         self._cache: dict[int, Fact] | None = None
         self._ids: list[int] = []
         self._mat = None  # normalized embeddings: numpy matrix, or list of lists
+        self._lock = threading.RLock()
+        self.reembedded = self._sync_embedder()
+
+    def _sync_embedder(self) -> int:
+        """If the embedding model changed (e.g. offline hash -> Ollama), vectors are not comparable:
+        recompute every fact's embedding once so recall stays correct."""
+        name = getattr(self.embedder, "name", type(self.embedder).__name__)
+        old = self.store.get_meta("embedder")
+        n = 0
+        if old is not None and old != name:
+            facts = self.store.facts()
+            for i in range(0, len(facts), 32):
+                chunk = facts[i:i + 32]
+                for f, v in zip(chunk, self.embedder.embed([f.text for f in chunk])):
+                    self.store.update_fact(f.id, embedding=v)
+                    n += 1
+        if old != name:
+            self.store.set_meta("embedder", name)
+        return n
 
     @staticmethod
     def _unit(v):
@@ -71,10 +99,12 @@ class MemoryManager:
         self._cache = None
 
     # FR1.1 episodic
+    @_locked
     def log_episode(self, kind: str, content: str) -> int:
         return self.store.add_episode(kind, content, ts=self.clock())
 
     # FR1.2 semantic
+    @_locked
     def remember(self, text: str, importance: float = 0.5, source: str = "chat") -> int:
         text = text.strip()
         emb = self.embedder.embed([text])[0]
@@ -88,6 +118,7 @@ class MemoryManager:
         self._invalidate()
         return fid
 
+    @_locked
     def recall(self, query: str, k: int = 5, min_score: float = 0.15) -> list[Fact]:
         facts = self._facts()
         if not facts:
@@ -108,6 +139,7 @@ class MemoryManager:
             f.uses += 1; f.last_used = now      # keep the in-RAM copy current; no cache reload
         return top
 
+    @_locked
     def extract_and_store(self, llm, user_text: str, reply: str) -> list[int]:
         try:
             msg = llm.chat([{"role": "user", "content": EXTRACT_PROMPT.format(user=user_text, reply=reply)}])
@@ -116,6 +148,7 @@ class MemoryManager:
         return [self.remember(t, importance=0.6) for t in parse_json_list(msg.get("content", ""))[:5]]
 
     # FR1.3 consolidation + forgetting
+    @_locked
     def consolidate(self, llm=None, older_than_days: float = 1.0, batch: int = 40) -> int:
         cutoff = self.clock() - older_than_days * DAY
         eps = [e for e in self.store.episodes(limit=100000, only_unconsolidated=True) if e.ts <= cutoff]
@@ -140,6 +173,7 @@ class MemoryManager:
         age_days = (self.clock() - f.last_used) / DAY
         return f.importance * math.exp(-age_days / 90.0) + 0.05 * min(f.uses, 10)
 
+    @_locked
     def forget(self, threshold: float = 0.08, episode_retention_days: float = 90.0) -> dict:
         pruned = 0
         for f in list(self._facts().values()):
@@ -152,13 +186,16 @@ class MemoryManager:
         return {"facts_pruned": pruned, "episodes_pruned": len(old)}
 
     # NFR4.2 user control
+    @_locked
     def edit(self, fid: int, text: str) -> None:
         self.store.update_fact(fid, text=text, embedding=self.embedder.embed([text])[0])
         self._invalidate()
 
+    @_locked
     def delete(self, fid: int) -> bool:
         ok = self.store.delete_fact(fid); self._invalidate(); return ok
 
+    @_locked
     def export(self) -> dict:
         return {
             "facts": [{"id": f.id, "text": f.text, "importance": f.importance, "uses": f.uses, "ts": f.ts}
@@ -167,5 +204,6 @@ class MemoryManager:
                          for e in self.store.episodes(limit=100000)],
         }
 
+    @_locked
     def wipe(self) -> None:
         self.store.wipe(); self._invalidate()

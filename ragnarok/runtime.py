@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from .config import Config
 from .crypto import Vault
 from .integrations import imap_fetch_unseen, register_integrations
 from .intent import SkillRouter
-from .llm import OllamaClient
+from .llm import OllamaClient, OllamaError
 from .memory import HashEmbedder, MemoryManager, MemoryStore
 from .memory_skills import register_memory_skills
 from .permissions import ApprovalStore, Policy
@@ -46,6 +47,7 @@ class Runtime:
         self.orchestrator = Orchestrator(self.llm, self._execute_task, self.config.data_dir,
                                          notify=self.notify, log=self.agent.log)
         self.runner: TriggerRunner | None = None
+        self._lock = threading.RLock()   # one conversation at a time (daemon, UI and CLI share the agent)
 
     # ---- helpers
     def notify(self, text: str) -> None:
@@ -63,12 +65,14 @@ class Runtime:
 
     # ---- public API
     def chat(self, text: str) -> str:
-        return self.agent.run(text)
+        with self._lock:
+            return self.agent.run(text)
 
     def do(self, goal: str) -> str:
-        plan = make_plan(self.llm, goal, self.registry.names())
-        self.orchestrator.run(plan)
-        return self.orchestrator.summarize(plan)
+        with self._lock:
+            plan = make_plan(self.llm, goal, self.registry.names())
+            self.orchestrator.run(plan)
+            return self.orchestrator.summarize(plan)
 
     def brief(self) -> str:
         return morning_brief(self.memory, self.llm)
@@ -83,6 +87,12 @@ class Runtime:
 
     # ---- always-on
     def _on_trigger(self, task: str, name: str) -> None:
+        try:
+            self._handle_trigger(task, name)
+        except OllamaError as e:       # model server down: tell the user, keep the sentinel alive
+            self.notify(f"[{name}] could not run: {e}")
+
+    def _handle_trigger(self, task: str, name: str) -> None:
         if task == BRIEF:
             self.notify(self.brief())
         elif task == CONSOLIDATE:
@@ -90,7 +100,7 @@ class Runtime:
             res = self.memory.forget()
             self.notify(f"Memory maintenance: +{added} consolidated, pruned {res}")
         else:
-            self.notify(f"[{name}] {self.agent.run(task)}")
+            self.notify(f"[{name}] {self.chat(task)}")
 
     def start_daemon(self, poll_seconds: float = 5.0, brief_at: str = "08:00", maintenance_at: str = "03:00") -> TriggerRunner:
         inbox = self.config.data_dir / "inbox"; inbox.mkdir(exist_ok=True)
@@ -102,8 +112,11 @@ class Runtime:
         if os.environ.get("IMAP_HOST"):
             triggers.append(EmailTrigger("email", imap_fetch_unseen))
         self.runner = TriggerRunner(triggers, self._on_trigger, poll_seconds, log=self.agent.log)
-        for s in self.resume_unfinished():
-            self.notify("Resumed unfinished plan after restart:\n" + s)
+        try:
+            for s in self.resume_unfinished():
+                self.notify("Resumed unfinished plan after restart:\n" + s)
+        except OllamaError as e:
+            self.notify(f"Could not resume unfinished plans yet: {e}")
         self.runner.start()
         return self.runner
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,7 @@ CREATE TABLE IF NOT EXISTS facts (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, text BLOB NOT NULL,
   embedding BLOB NOT NULL, importance REAL NOT NULL DEFAULT 0.5,
   last_used REAL NOT NULL, uses INTEGER NOT NULL DEFAULT 0, source TEXT NOT NULL DEFAULT 'chat');
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
 
@@ -47,8 +49,27 @@ class MemoryStore:
         self.dir = Path(data_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.vault = vault or Vault(self.dir)
-        self.db = sqlite3.connect(self.dir / "memory.db", check_same_thread=False)
+        self._local = threading.local()      # one SQLite connection per thread (daemon + UI + CLI)
+        self._conns: list[sqlite3.Connection] = []
         self.db.executescript(SCHEMA)
+        self.db.commit()
+
+    @property
+    def db(self) -> sqlite3.Connection:
+        c = getattr(self._local, "conn", None)
+        if c is None:
+            c = sqlite3.connect(self.dir / "memory.db", timeout=30)
+            c.execute("PRAGMA journal_mode=WAL")
+            self._local.conn = c
+            self._conns.append(c)
+        return c
+
+    def get_meta(self, key: str) -> str | None:
+        r = self.db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return r[0] if r else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        self.db.execute("INSERT INTO meta(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
         self.db.commit()
 
     # episodes
@@ -135,4 +156,7 @@ class MemoryStore:
         self.db.commit(); self.db.execute("VACUUM")
 
     def close(self) -> None:
-        self.db.close()
+        for c in self._conns:
+            try: c.close()
+            except sqlite3.Error: pass
+        self._conns.clear(); self._local = threading.local()

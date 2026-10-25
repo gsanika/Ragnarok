@@ -10,7 +10,7 @@ from typing import Callable
 from .config import Config
 from .llm import LLM
 from .log import ExecutionLog
-from .skills import SkillRegistry
+from .skills import SkillRegistry, normalize_args
 
 SYSTEM_PROMPT = (
     "You are Ragnarok, a private personal assistant running entirely on the user's "
@@ -69,6 +69,11 @@ class Agent:
         skill = self.registry.get(name)
         if skill is None:
             return f"error: unknown skill '{name}'"
+        try:
+            args = normalize_args(skill, args)
+        except (ValueError, TypeError) as e:
+            self.log.record("bad_arguments", skill=name, error=str(e))
+            return f"error: bad arguments for '{name}': {e}"
         if self.policy is not None and not self.policy.allows(name):
             self.log.record("blocked_by_role", skill=name, role=self.policy.role)
             return f"error: role '{self.policy.role}' may not use '{name}'"
@@ -119,6 +124,8 @@ class Agent:
                 fn = call["function"]
                 args = fn.get("arguments", {}) or {}
                 self.log.record("tool_call", skill=fn["name"], args=args)
+                if isinstance(args, str):
+                    fn["arguments"] = {}  # keep history valid for the next Ollama request
                 out = self._run_tool(fn["name"], args)
                 self.history.append({"role": "tool", "content": out, "tool_name": fn["name"]})
             self.save_state()
