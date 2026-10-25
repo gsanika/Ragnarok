@@ -77,6 +77,9 @@ def main(argv=None) -> None:
     ap = sub.add_parser("approvals", help="pending risky-action approvals")
     aps = ap.add_subparsers(dest="acmd", required=True)
     aps.add_parser("list"); g = aps.add_parser("grant"); g.add_argument("id"); r = aps.add_parser("reject"); r.add_argument("id")
+    c = sub.add_parser("connect", help="sign in to your Google or Microsoft account (opt-in)"); c.add_argument("provider", choices=["google", "microsoft"])
+    dc = sub.add_parser("disconnect", help="forget a connected account"); dc.add_argument("provider", choices=["google", "microsoft"])
+    sub.add_parser("connections", help="show connected accounts")
     sub.add_parser("doctor", help="check Ollama, models, key file, sandbox and optional extras")
     b = sub.add_parser("bench", help="benchmark the non-functional requirements"); b.add_argument("--ollama", action="store_true"); b.add_argument("--facts", type=int, default=2000)
     args = p.parse_args(argv)
@@ -89,6 +92,22 @@ def main(argv=None) -> None:
             from .llm import OllamaClient
             emb = OllamaClient()
         print(bench.report(bench.run(emb, n_facts=args.facts, out=Config().data_dir / "bench.json"))); return
+
+    if cmd in ("connect", "disconnect", "connections"):
+        from .cloud import oauth
+        from .crypto import Vault
+        cfg = Config(); store = oauth.TokenStore(cfg.data_dir, Vault(cfg.data_dir))
+        try:
+            if cmd == "connect":
+                (oauth.connect_google if args.provider == "google" else oauth.connect_microsoft)(store)
+                print(f"{args.provider} connected. Restart the daemon so the new skills load.")
+            elif cmd == "disconnect":
+                print("disconnected" if store.remove(args.provider) else "was not connected")
+            else:
+                print("connected:", ", ".join(store.connected()) or "none (everything is local-only)")
+        except oauth.AuthError as e:
+            print(f"ragnarok: {e}", file=sys.stderr); sys.exit(1)
+        return
 
     if cmd == "doctor":
         sys.exit(_doctor())

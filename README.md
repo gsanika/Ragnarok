@@ -103,6 +103,29 @@ All run locally; nothing is sent anywhere except to your own mail server.
 | IDE / code projects (read-only) | `list_project`, `read_project_file`, `search_project`, `git_status` | `RAGNAROK_PROJECTS=/path/a:/path/b` (`;` on Windows). Nothing outside these folders is readable. |
 | Notes | `write_note`, `read_note`, `list_notes`, `delete_note` (approval) | none |
 
+### Optional cloud accounts: Google and Microsoft (opt-in, off by default)
+
+Ollama still does **all** reasoning locally. These connectors only call your own mail/calendar provider for actions you ask for, so that mail and calendar data does travel to Google/Microsoft (it already lives there). Skip this section to stay 100% local.
+
+| Provider | Skills | Risky (needs approval) |
+|---|---|---|
+| Google | `gcal_list_events`, `gcal_add_event`, `gmail_check` | `gmail_send` |
+| Microsoft 365 / Outlook | `outlook_list_events`, `outlook_add_event`, `outlook_check_mail` | `outlook_send_mail` |
+
+You register your own app, so no keys are bundled and nobody else can see your usage:
+
+**Google (≈5 min):** console.cloud.google.com → new project → enable *Google Calendar API* and *Gmail API* → *OAuth consent screen* (External, add yourself as a test user) → *Credentials → Create OAuth client ID → Desktop app*. Then:
+```
+export GOOGLE_CLIENT_ID=...   GOOGLE_CLIENT_SECRET=...      # Windows: set / $env:
+ragnarok connect google        # opens your browser; sign in and allow
+```
+**Microsoft (≈5 min):** entra.microsoft.com → App registrations → New → *Accounts in any org + personal*, enable *Allow public client flows* → API permissions: `Calendars.ReadWrite`, `Mail.Read`, `Mail.Send` (delegated). Then:
+```
+export MS_CLIENT_ID=...
+ragnarok connect microsoft     # shows a code to enter at microsoft.com/devicelogin
+```
+`ragnarok connections` lists linked accounts, `ragnarok disconnect google|microsoft` removes them (Google tokens are also revoked). Restart the daemon after connecting. Tokens are stored encrypted with your memory key. Connected mailboxes feed the always-on email trigger under the same read-only, quoted-as-data protection as IMAP.
+
 **Safety:** text arriving from outsiders (email subjects, files dropped in `data/inbox/`) is quoted as data and handled under the read-only `viewer` role, so a malicious email can't make the agent send mail or delete anything.
 
 ## Honest limitations
@@ -113,7 +136,7 @@ All run locally; nothing is sent anywhere except to your own mail server.
 - Retrieval latency in the bench uses the offline hash embedder; real embeddings add one Ollama round trip (~tens of ms for `nomic-embed-text`).
 - Small local models can pick tools poorly. The skill router and reflection loop reduce this but don't remove it.
 - The default test suite uses scripted fake models. `tests/test_live_ollama.py` runs a real end-to-end check automatically when Ollama and the default models are available (`ragnarok doctor` tells you). It has not been run by the author yet.
-- Integrations are tested with fake mail servers, not real Gmail/Outlook. Calendar sync is file-based (.ics); live Google/Outlook sync would need cloud OAuth, which conflicts with the local-first goal.
+- Google/Microsoft connectors are tested against faked APIs only (request shapes, token refresh, device flow, errors); they have never talked to the real services. Google apps left in 'Testing' mode expire refresh tokens after 7 days. Integrations are tested with fake mail servers, not real Gmail/Outlook. Local calendar is file-based (.ics); live Google/Outlook calendars are available through the opt-in connectors above.
 - Switching embedding models re-embeds all stored facts automatically on next start.
 
 ## Development

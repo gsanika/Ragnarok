@@ -9,6 +9,8 @@ from pathlib import Path
 
 from . import builtin_skills  # noqa: F401  (registers starter skills)
 from .agent import Agent
+from .cloud.oauth import TokenStore
+from .cloud.providers import register_cloud
 from .config import Config
 from .crypto import Vault
 from .integrations import imap_fetch_unseen, register_integrations
@@ -42,6 +44,8 @@ class Runtime:
         self.memory = MemoryManager(self.store, self.embedder)
         register_memory_skills(registry, self.memory)
         register_integrations(registry, self.config.data_dir)
+        self.tokens = TokenStore(self.config.data_dir, self.vault)
+        self.mail_fetchers = register_cloud(registry, self.tokens)   # only for providers you connected
         self.registry = registry
         self.policy = Policy.load(self.config.data_dir, role)
         self.approvals = ApprovalStore(self.config.data_dir)
@@ -125,8 +129,16 @@ class Runtime:
             DailyTrigger("memory-maintenance", maintenance_at, CONSOLIDATE),
             FileWatchTrigger("inbox-folder", inbox, "A file changed in my inbox folder: {path}. Take a look and tell me what it is."),
         ]
-        if os.environ.get("IMAP_HOST"):
-            triggers.append(EmailTrigger("email", imap_fetch_unseen))
+        fetchers = list(self.mail_fetchers.values()) + ([imap_fetch_unseen] if os.environ.get("IMAP_HOST") else [])
+        if fetchers:
+            def all_mail():
+                out = []
+                for f in fetchers:
+                    try: out += f()
+                    except Exception as e:
+                        self.agent.log.record("mail_fetch_error", error=repr(e))
+                return out
+            triggers.append(EmailTrigger("email", all_mail))
         self.runner = TriggerRunner(triggers, self._on_trigger, poll_seconds, log=self.agent.log)
         try:
             for s in self.resume_unfinished():
