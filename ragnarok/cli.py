@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import sys
 import time
 
@@ -80,6 +81,7 @@ def main(argv=None) -> None:
     c = sub.add_parser("connect", help="sign in to your Google or Microsoft account (opt-in)"); c.add_argument("provider", choices=["google", "microsoft"])
     dc = sub.add_parser("disconnect", help="forget a connected account"); dc.add_argument("provider", choices=["google", "microsoft"])
     sub.add_parser("connections", help="show connected accounts")
+    mt = sub.add_parser("mailtest", help="send a test email to yourself using the SMTP_* settings"); mt.add_argument("--to", default="")
     sub.add_parser("doctor", help="check Ollama, models, key file, sandbox and optional extras")
     b = sub.add_parser("bench", help="benchmark the non-functional requirements"); b.add_argument("--ollama", action="store_true"); b.add_argument("--facts", type=int, default=2000)
     args = p.parse_args(argv)
@@ -108,6 +110,18 @@ def main(argv=None) -> None:
         except oauth.AuthError as e:
             print(f"ragnarok: {e}", file=sys.stderr); sys.exit(1)
         return
+
+    if cmd == "mailtest":
+        import tempfile
+        from pathlib import Path
+        from .integrations import register_integrations
+        from .skills import SkillRegistry
+        to = args.to or os.environ.get("SMTP_USER", "")
+        if not to:
+            print("Set SMTP_HOST, SMTP_PORT, SMTP_USER and SMTP_PASSWORD first (see README)."); sys.exit(1)
+        r = SkillRegistry(); register_integrations(r, Path(tempfile.mkdtemp()))
+        out = r.get("send_email").func(to, "Ragnarok test", "Hello from Ragnarok. If you can read this, email sending works.")
+        print(out); sys.exit(0 if out.startswith("sent") else 1)
 
     if cmd == "doctor":
         sys.exit(_doctor())

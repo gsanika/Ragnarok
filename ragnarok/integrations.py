@@ -85,12 +85,20 @@ def register_integrations(reg: SkillRegistry, data_dir: Path) -> None:
             return "error: SMTP not configured (set SMTP_HOST, SMTP_USER, SMTP_PASSWORD)"
         msg = EmailMessage(); msg["From"], msg["To"], msg["Subject"] = user, to, subject; msg.set_content(body)
         port = int(os.environ.get("SMTP_PORT", "465"))
-        if port == 465:                       # implicit TLS
-            with smtplib.SMTP_SSL(host, port) as s:
-                s.login(user, pw); s.send_message(msg)
-        else:                                 # 587 etc.: STARTTLS
-            with smtplib.SMTP(host, port) as s:
-                s.starttls(); s.login(user, pw); s.send_message(msg)
+        try:
+            if port == 465:                       # implicit TLS
+                with smtplib.SMTP_SSL(host, port, timeout=30) as s:
+                    s.login(user, pw.strip()); s.send_message(msg)
+            else:                                 # 587 etc.: STARTTLS
+                with smtplib.SMTP(host, port, timeout=30) as s:
+                    s.starttls(); s.login(user, pw.strip()); s.send_message(msg)
+        except smtplib.SMTPAuthenticationError:
+            return ("error: the mail server rejected the login. For Gmail/Outlook use an *app password* "
+                    "(2-step verification must be on), and check SMTP_USER is the full address.")
+        except smtplib.SMTPRecipientsRefused:
+            return f"error: the server refused the recipient '{to}'."
+        except (OSError, smtplib.SMTPException) as e:
+            return f"error: could not reach the mail server {host}:{port} ({type(e).__name__}: {e}). Check SMTP_HOST/SMTP_PORT and your internet connection."
         return f"sent to {to}"
 
     @reg.register(description="Delete a saved note. Requires the user's approval.", risky=True)

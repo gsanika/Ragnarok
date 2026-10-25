@@ -32,7 +32,7 @@ def test_imap_reads_headers_only_and_readonly(monkeypatch):
 def test_smtp_uses_tls_on_both_ports(monkeypatch, tmp_path, port, ssl):
     log = []
     class S:
-        def __init__(self, host, port): log.append(("init", type(self).__name__))
+        def __init__(self, host, port, **kw): log.append(("init", type(self).__name__))
         def __enter__(self): return self
         def __exit__(self, *a): pass
         def starttls(self): log.append("starttls")
@@ -100,3 +100,17 @@ def test_email_trigger_text_runs_read_only(tmp_path):
     assert "send_email" not in seen["tools"] and "delete_note" not in seen["tools"]
     assert "<external>" in seen["prompt"] and rt.agent.policy.role == "assistant"    # policy restored
     rt.close()
+
+
+def test_smtp_errors_become_readable_messages(monkeypatch, tmp_path):
+    for k in ("HOST", "USER", "PASSWORD"): monkeypatch.setenv("SMTP_" + k, "x")
+    class Bad:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def login(self, u, p): raise smtplib.SMTPAuthenticationError(535, b"bad")
+    monkeypatch.setattr(smtplib, "SMTP_SSL", Bad)
+    assert "app password" in reg_for(tmp_path).get("send_email").func("a@b.c", "s", "b")
+    def down(*a, **k): raise OSError("Name or service not known")
+    monkeypatch.setattr(smtplib, "SMTP_SSL", down)
+    assert "could not reach the mail server" in reg_for(tmp_path).get("send_email").func("a@b.c", "s", "b")
