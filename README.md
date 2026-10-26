@@ -128,6 +128,8 @@ ragnarok connect microsoft     # shows a code to enter at microsoft.com/devicelo
 
 **Email setup (once):** run `ragnarok setup-email`. It asks for your address and app password (hidden), saves them encrypted next to your memory, and sends you a test email. After that every terminal, the daemon and the UI can send. If email isn't set up, the agent says so immediately instead of queuing an approval that can't work.
 
+**Honest replies:** whenever a risky action is waiting, declined or failed, Ragnarok replaces the model's wording with a plain status line, so a small model can't claim it sent something it didn't. `ragnarok --version` shows what you're running; `ragnarok reset-chat` clears a saved conversation that contains old wrong answers.
+
 **Approvals:** risky actions (sending mail, deleting notes, running code) are queued. Clicking *Approve* in the UI (or `ragnarok approvals grant ID`) runs exactly the action you reviewed, once; the agent is told it is pending, never that it was sent.
 
 **Safety:** text arriving from outsiders (email subjects, files dropped in `data/inbox/`) is quoted as data and handled under the read-only `viewer` role, so a malicious email can't make the agent send mail or delete anything.

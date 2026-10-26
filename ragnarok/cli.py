@@ -4,6 +4,7 @@ import os
 import sys
 import time
 
+from . import __version__
 from .config import Config
 from .llm import OllamaError
 
@@ -63,6 +64,7 @@ def main(argv=None) -> None:
     p = argparse.ArgumentParser(prog="ragnarok", description="Sovereign, always-on personal AI agent (local Ollama only).")
     p.add_argument("--role", default="assistant", choices=["viewer", "assistant", "admin"])
     p.add_argument("--offline-embeddings", action="store_true", help="use the built-in hash embedder instead of Ollama embeddings")
+    p.add_argument("--version", action="version", version=f"ragnarok {__version__}")
     sub = p.add_subparsers(dest="cmd")
     sub.add_parser("chat", help="interactive chat (default)")
     d = sub.add_parser("do", help="plan and execute a multi-step goal"); d.add_argument("goal")
@@ -87,6 +89,7 @@ def main(argv=None) -> None:
     se = sub.add_parser("setup-email", help="save your email login once (encrypted) so sending works in every terminal")
     se.add_argument("--host", default="smtp.gmail.com"); se.add_argument("--port", type=int, default=465); se.add_argument("--user", default="")
     mt = sub.add_parser("mailtest", help="send a test email to yourself using the SMTP_* settings"); mt.add_argument("--to", default="")
+    sub.add_parser("reset-chat", help="forget the saved conversation (long-term memory stays); stop the daemon first")
     sub.add_parser("doctor", help="check Ollama, models, key file, sandbox and optional extras")
     b = sub.add_parser("bench", help="benchmark the non-functional requirements"); b.add_argument("--ollama", action="store_true"); b.add_argument("--facts", type=int, default=2000)
     args = p.parse_args(argv)
@@ -140,6 +143,15 @@ def main(argv=None) -> None:
             "error: SMTP not configured. Run `ragnarok setup-email` once."
         print(out); sys.exit(0 if out.startswith("sent") else 1)
 
+    if cmd == "reset-chat":
+        cfg, n = Config(), 0
+        for f in ("state.json", "state_subtask.json"):
+            p_ = cfg.data_dir / f
+            if p_.exists():
+                p_.unlink(); n += 1
+        print(f"Conversation cleared ({n} file(s)). Long-term memory is untouched. Start Ragnarok again.")
+        return
+
     if cmd == "doctor":
         sys.exit(_doctor())
 
@@ -147,7 +159,7 @@ def main(argv=None) -> None:
     try:
         rt = _runtime(interactive=cmd in ("chat", "do"), role=args.role, offline=args.offline_embeddings)
         if cmd == "chat":
-            print(f"Ragnarok ready (model: {rt.config.chat_model}, role: {rt.policy.role}). Ctrl-D to quit.")
+            print(f"Ragnarok v{__version__} ready (model: {rt.config.chat_model}, role: {rt.policy.role}). Ctrl-D to quit.")
             try:
                 while True:
                     t = input("you> ").strip()
@@ -165,7 +177,7 @@ def main(argv=None) -> None:
             print(rt.brief())
         elif cmd == "daemon":
             rt.start_daemon(args.poll, args.brief_at, args.maintenance_at)
-            print("Ragnarok daemon running. Ctrl-C to stop. Notifications: data/notifications.jsonl")
+            print(f"Ragnarok v{__version__} daemon running. Ctrl-C to stop. Notifications: data/notifications.jsonl")
             if args.ui:
                 from .server import serve
                 serve(rt, args.port)

@@ -14,7 +14,9 @@ from .skills import SkillRegistry, normalize_args
 
 SYSTEM_PROMPT = (
     "You are Ragnarok, a private personal assistant running entirely on the user's "
-    "machine. Use the provided tools when they help. Be concise."
+    "machine. Use the provided tools when they help. Be concise. "
+    "Never say an action was done (sent, saved, deleted, scheduled) unless a tool result in this conversation says it "
+    "succeeded. If a tool result says PENDING or error, tell the user exactly that."
 )
 MAX_HISTORY = 30
 
@@ -45,6 +47,7 @@ class Agent:
         self.log = ExecutionLog(self.config.log_path)
         self.state_path = self.config.data_dir / "state.json"
         self.history: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        self._blocked: list[tuple[str, str, str]] = []   # risky actions that did NOT happen this turn
         if restore:
             self.load_state()
 
@@ -67,6 +70,27 @@ class Agent:
             while len(self.history) > 1 and self.history[1].get("role") == "tool":
                 del self.history[1]
 
+    def _flag(self, skill, kind: str, detail: str) -> None:
+        if skill.risky:
+            self._blocked.append((skill.name, kind, detail))
+
+    def _verdict(self) -> str:
+        """Plain status for risky actions that did not happen. Replaces the model's wording,
+        because a small model may claim 'email sent' when nothing was sent."""
+        if not self._blocked:
+            return ""
+        lines = []
+        for name, kind, detail in self._blocked:
+            if kind == "pending":
+                lines.append(f"WAITING FOR APPROVAL - NOT done yet: {name} {detail}")
+            elif kind == "denied":
+                lines.append(f"Not done - you declined: {name} {detail}")
+            else:
+                lines.append(f"Could not complete {name}: {detail}")
+        if any(k == "pending" for _, k, _ in self._blocked):
+            lines.append("Open the Approvals tab and click Approve (or run `ragnarok approvals list`).")
+        return "\n".join(lines)
+
     def _run_tool(self, name: str, args: dict) -> str:
         skill = self.registry.get(name)
         if skill is None:
@@ -75,29 +99,37 @@ class Agent:
             args = normalize_args(skill, args)
         except (ValueError, TypeError) as e:
             self.log.record("bad_arguments", skill=name, error=str(e))
+            self._flag(skill, "failed", f"bad arguments: {e}")
             return f"error: bad arguments for '{name}': {e}"
         if self.policy is not None and not self.policy.allows(name):
             self.log.record("blocked_by_role", skill=name, role=self.policy.role)
+            self._flag(skill, "failed", f"your role '{self.policy.role}' may not use it")
             return f"error: role '{self.policy.role}' may not use '{name}'"
         if skill.precheck is not None:           # don't ask the user to approve something that cannot work
             problem = skill.precheck()
             if problem:
                 self.log.record("precheck_failed", skill=name, error=problem)
+                self._flag(skill, "failed", problem)
                 return problem
         if skill.risky and not self.approve(name, args):
             if self.deferred_approvals:
                 self.log.record("approval_pending", skill=name, args=args)
+                self._flag(skill, "pending", json.dumps(args, ensure_ascii=False, default=str)[:200])
                 return ("PENDING: this action needs the user's approval and has NOT been done yet. It is queued in the Ragnarok UI "
                         "(Pending approvals) and will run automatically once approved. Do not call it again; tell the user it is "
                         "waiting for their approval.")
             self.log.record("denied", skill=name, args=args)
+            self._flag(skill, "denied", json.dumps(args, ensure_ascii=False, default=str)[:200])
             return "error: user did not approve this action"
         try:
             result = str(skill.func(**args))
             self.log.record("tool_result", skill=name, args=args, result=result[:2000])
+            if result.startswith("error"):
+                self._flag(skill, "failed", result)
             return result
         except Exception as e:  # NFR3.1: a failing tool must not crash the run
             self.log.record("tool_error", skill=name, args=args, error=repr(e))
+            self._flag(skill, "failed", repr(e))
             return f"error: {e!r}"
 
     def _context_messages(self, user_text: str) -> list[dict]:
@@ -112,6 +144,7 @@ class Agent:
 
     def run(self, user_text: str) -> str:
         self.history.append({"role": "user", "content": user_text})
+        self._blocked = []
         self.log.record("user", text=user_text)
         if self.memory:
             self.memory.log_episode("user", user_text)
@@ -143,6 +176,16 @@ class Agent:
             self.save_state()
         else:
             self.log.record("max_steps_reached")
+
+        verdict = self._verdict()
+        if verdict:                       # never let the model's wording stand in for what really happened
+            reply = verdict
+            last = self.history[-1] if self.history else {}
+            if last.get("role") == "assistant" and not last.get("tool_calls"):
+                last["content"] = reply
+            else:
+                self.history.append({"role": "assistant", "content": reply})
+            self.log.record("verdict", text=reply)
 
         if self.memory:
             self.memory.log_episode("assistant", reply)
