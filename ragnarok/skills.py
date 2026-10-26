@@ -15,6 +15,7 @@ class Skill:
     description: str
     func: Callable[..., Any]
     risky: bool = False  # risky skills need user approval (NFR4.3)
+    precheck: Callable[[], str | None] | None = None  # returns a problem text if the skill cannot work right now
 
     def schema(self) -> dict:
         props, required = {}, []
@@ -62,13 +63,14 @@ class SkillRegistry:
     def __init__(self):
         self._skills: dict[str, Skill] = {}
 
-    def register(self, name: str | None = None, description: str | None = None, risky: bool = False):
+    def register(self, name: str | None = None, description: str | None = None, risky: bool = False, precheck=None):
         def deco(func: Callable[..., Any]):
             s = Skill(
                 name=name or func.__name__,
                 description=description or (inspect.getdoc(func) or "").split("\n")[0],
                 func=func,
                 risky=risky,
+                precheck=precheck,
             )
             self._skills[s.name] = s
             return func

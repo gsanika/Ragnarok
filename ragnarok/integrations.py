@@ -42,6 +42,24 @@ def imap_fetch_unseen(limit: int = 10) -> list[tuple[str, str, str]]:
     return out
 
 
+SMTP_HELP = ("error: SMTP not configured. Run `ragnarok setup-email` once (it saves your login encrypted), "
+             "or set SMTP_HOST, SMTP_USER and SMTP_PASSWORD.")
+
+
+def smtp_settings(data_dir: Path) -> dict | None:
+    """Environment variables win; otherwise the login saved by `ragnarok setup-email`."""
+    try:
+        from .credentials import CredentialStore
+        cfg = dict(CredentialStore(data_dir).get("smtp") or {})
+    except Exception:           # unreadable store (e.g. different key): treat as not set up
+        cfg = {}
+    for k in ("host", "user", "password", "port"):
+        v = os.environ.get("SMTP_" + k.upper())
+        if v:
+            cfg[k] = v
+    return cfg if all(cfg.get(k) for k in ("host", "user", "password")) else None
+
+
 def register_integrations(reg: SkillRegistry, data_dir: Path) -> None:
     data_dir = Path(data_dir)
     notes = data_dir / "notes"; notes.mkdir(parents=True, exist_ok=True)
@@ -78,13 +96,15 @@ def register_integrations(reg: SkillRegistry, data_dir: Path) -> None:
         msgs = imap_fetch_unseen()
         return "\n".join(f"{s} — {f}" for _, s, f in msgs) or "no unread email (or IMAP not configured)"
 
-    @reg.register(description="Send an email. Requires the user's approval.", risky=True)
+    @reg.register(description="Send an email. Requires the user's approval.", risky=True,
+                  precheck=lambda: None if smtp_settings(data_dir) else SMTP_HELP)
     def send_email(to: str, subject: str, body: str) -> str:
-        host, user, pw = os.environ.get("SMTP_HOST"), os.environ.get("SMTP_USER"), os.environ.get("SMTP_PASSWORD")
-        if not (host and user and pw):
-            return "error: SMTP not configured (set SMTP_HOST, SMTP_USER, SMTP_PASSWORD)"
+        cfg = smtp_settings(data_dir)
+        if not cfg:
+            return SMTP_HELP
+        host, user, pw = cfg["host"], cfg["user"], cfg["password"]
         msg = EmailMessage(); msg["From"], msg["To"], msg["Subject"] = user, to, subject; msg.set_content(body)
-        port = int(os.environ.get("SMTP_PORT", "465"))
+        port = int(cfg.get("port") or 465)
         try:
             if port == 465:                       # implicit TLS
                 with smtplib.SMTP_SSL(host, port, timeout=30) as s:

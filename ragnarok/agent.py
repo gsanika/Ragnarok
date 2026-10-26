@@ -79,6 +79,11 @@ class Agent:
         if self.policy is not None and not self.policy.allows(name):
             self.log.record("blocked_by_role", skill=name, role=self.policy.role)
             return f"error: role '{self.policy.role}' may not use '{name}'"
+        if skill.precheck is not None:           # don't ask the user to approve something that cannot work
+            problem = skill.precheck()
+            if problem:
+                self.log.record("precheck_failed", skill=name, error=problem)
+                return problem
         if skill.risky and not self.approve(name, args):
             if self.deferred_approvals:
                 self.log.record("approval_pending", skill=name, args=args)

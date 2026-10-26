@@ -61,12 +61,21 @@ def test_goal_plan_executes_end_to_end(rt):
     assert len(plans) == 1 and rt.orchestrator.unfinished() == []
 
 
-def test_risky_action_blocked_until_approved(rt):
+def test_risky_action_blocked_until_approved(rt, monkeypatch):
+    import smtplib
+    class S:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def login(self, u, p): pass
+        def send_message(self, m): pass
+    monkeypatch.setattr(smtplib, "SMTP_SSL", S)
+    for k in ("HOST", "USER", "PASSWORD"): monkeypatch.setenv("SMTP_" + k, "x")
     assert "approval" in rt.chat("send the email")
     pending = rt.approvals.pending()
     assert len(pending) == 1 and pending[0]["skill"] == "send_email"
     result = rt.run_approval(pending[0]["id"])          # approving runs the queued action itself
-    assert "SMTP not configured" in result              # executed (no SMTP in the test env)
+    assert "sent to a@b.c" in result                    # the approved call really ran
     assert any(e["event"] == "approved_action" and e["skill"] == "send_email" for e in rt.agent.log.read())
 
 

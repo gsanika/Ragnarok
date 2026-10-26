@@ -46,6 +46,9 @@ def _doctor() -> int:
         line(not (kf.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO)), "key file permissions are private", f"chmod 600 {kf}")
     else:
         print("  info key file will be created on first run (back it up, or set RAGNAROK_PASSPHRASE)")
+    from .integrations import smtp_settings
+    s = smtp_settings(cfg.data_dir)
+    print(f"  ok   email sending is set up ({s['user']})" if s else "  info email not set up: run `ragnarok setup-email` once")
     print("  " + ("ok   " if docker_available() else "info ") + "docker " + ("available: sandbox will use it (no network)" if docker_available() else "not available: sandbox uses process limits only"))
     try:
         import numpy  # noqa: F401
@@ -81,6 +84,8 @@ def main(argv=None) -> None:
     c = sub.add_parser("connect", help="sign in to your Google or Microsoft account (opt-in)"); c.add_argument("provider", choices=["google", "microsoft"])
     dc = sub.add_parser("disconnect", help="forget a connected account"); dc.add_argument("provider", choices=["google", "microsoft"])
     sub.add_parser("connections", help="show connected accounts")
+    se = sub.add_parser("setup-email", help="save your email login once (encrypted) so sending works in every terminal")
+    se.add_argument("--host", default="smtp.gmail.com"); se.add_argument("--port", type=int, default=465); se.add_argument("--user", default="")
     mt = sub.add_parser("mailtest", help="send a test email to yourself using the SMTP_* settings"); mt.add_argument("--to", default="")
     sub.add_parser("doctor", help="check Ollama, models, key file, sandbox and optional extras")
     b = sub.add_parser("bench", help="benchmark the non-functional requirements"); b.add_argument("--ollama", action="store_true"); b.add_argument("--facts", type=int, default=2000)
@@ -111,16 +116,28 @@ def main(argv=None) -> None:
             print(f"ragnarok: {e}", file=sys.stderr); sys.exit(1)
         return
 
-    if cmd == "mailtest":
-        import tempfile
-        from pathlib import Path
-        from .integrations import register_integrations
+    if cmd in ("mailtest", "setup-email"):
+        from .integrations import register_integrations, smtp_settings
         from .skills import SkillRegistry
-        to = args.to or os.environ.get("SMTP_USER", "")
-        if not to:
-            print("Set SMTP_HOST, SMTP_PORT, SMTP_USER and SMTP_PASSWORD first (see README)."); sys.exit(1)
-        r = SkillRegistry(); register_integrations(r, Path(tempfile.mkdtemp()))
-        out = r.get("send_email").func(to, "Ragnarok test", "Hello from Ragnarok. If you can read this, email sending works.")
+        cfg = Config()
+        if cmd == "setup-email":
+            import getpass
+            from .credentials import CredentialStore
+            user = args.user or input("Email address: ").strip()
+            pw = getpass.getpass("App password (typing is hidden): ")
+            if "gmail" in args.host:
+                pw = pw.replace(" ", "")              # Google shows app passwords in 4-letter groups
+            if not user or not pw:
+                print("Cancelled."); sys.exit(1)
+            CredentialStore(cfg.data_dir).put("smtp", {"host": args.host, "port": args.port, "user": user, "password": pw})
+            print("Saved (encrypted). Sending a test email to yourself...")
+            to = user
+        else:
+            s = smtp_settings(cfg.data_dir)
+            to = args.to or (s or {}).get("user", "")
+        r = SkillRegistry(); register_integrations(r, cfg.data_dir)
+        out = r.get("send_email").func(to, "Ragnarok test", "Hello from Ragnarok. If you can read this, email sending works.") if to else \
+            "error: SMTP not configured. Run `ragnarok setup-email` once."
         print(out); sys.exit(0 if out.startswith("sent") else 1)
 
     if cmd == "doctor":

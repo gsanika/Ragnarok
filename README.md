@@ -97,7 +97,7 @@ All run locally; nothing is sent anywhere except to your own mail server.
 
 | Area | Skills | Setup |
 |---|---|---|
-| Email | `check_email` (headers only, never marks read), `send_email` (needs approval); email trigger in daemon mode | `IMAP_HOST/USER/PASSWORD` (+`IMAP_PORT`), `SMTP_HOST/USER/PASSWORD` (+`SMTP_PORT`: 465 = TLS, 587 = STARTTLS). Gmail/Outlook need an *app password*. |
+| Email (SMTP) | `check_email` (headers only, never marks read), `send_email` (needs approval); email trigger in daemon mode | `IMAP_HOST/USER/PASSWORD` (+`IMAP_PORT`), `SMTP_HOST/USER/PASSWORD` (+`SMTP_PORT`: 465 = TLS, 587 = STARTTLS). Gmail/Outlook need an *app password*. |
 | Calendar | `add_event`, `list_events`, `export_calendar`, `import_calendar` (.ics, so Google/Outlook/Apple can exchange files) | none (stored in `data/calendar.json`) |
 | Tasks / project management | `add_task`, `list_tasks`, `complete_task` | none (`data/tasks.json`) |
 | IDE / code projects (read-only) | `list_project`, `read_project_file`, `search_project`, `git_status` | `RAGNAROK_PROJECTS=/path/a:/path/b` (`;` on Windows). Nothing outside these folders is readable. |
@@ -125,6 +125,8 @@ export MS_CLIENT_ID=...
 ragnarok connect microsoft     # shows a code to enter at microsoft.com/devicelogin
 ```
 `ragnarok connections` lists linked accounts, `ragnarok disconnect google|microsoft` removes them (Google tokens are also revoked). Restart the daemon after connecting. Tokens are stored encrypted with your memory key. Connected mailboxes feed the always-on email trigger under the same read-only, quoted-as-data protection as IMAP.
+
+**Email setup (once):** run `ragnarok setup-email`. It asks for your address and app password (hidden), saves them encrypted next to your memory, and sends you a test email. After that every terminal, the daemon and the UI can send. If email isn't set up, the agent says so immediately instead of queuing an approval that can't work.
 
 **Approvals:** risky actions (sending mail, deleting notes, running code) are queued. Clicking *Approve* in the UI (or `ragnarok approvals grant ID`) runs exactly the action you reviewed, once; the agent is told it is pending, never that it was sent.
 
