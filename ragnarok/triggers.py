@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import threading
 import time
 import traceback
@@ -28,15 +29,32 @@ class IntervalTrigger(Trigger):
 
 
 class DailyTrigger(Trigger):
-    def __init__(self, name: str, hhmm: str, task: str):
+    def __init__(self, name: str, hhmm: str, task: str, state_file: Path | None = None):
         self.name, self.task = name, task
         self.h, self.m = map(int, hhmm.split(":"))
-        self._fired_on: dt.date | None = None
+        self.state_file = Path(state_file) if state_file else None
+        self._fired_on: dt.date | None = self._load_state()
+
+    def _load_state(self) -> dt.date | None:
+        try:
+            return dt.date.fromisoformat(json.loads(self.state_file.read_text())[self.name]) if self.state_file else None
+        except Exception:
+            return None
+
+    def _save_state(self) -> None:
+        if not self.state_file or not self._fired_on:
+            return
+        try:
+            d = json.loads(self.state_file.read_text()) if self.state_file.exists() else {}
+        except Exception:
+            d = {}
+        d[self.name] = self._fired_on.isoformat()
+        self.state_file.write_text(json.dumps(d))
 
     def poll(self, now):
         t = dt.datetime.fromtimestamp(now)
         if (t.hour, t.minute) >= (self.h, self.m) and self._fired_on != t.date():
-            self._fired_on = t.date(); return [self.task]
+            self._fired_on = t.date(); self._save_state(); return [self.task]
         return []
 
 

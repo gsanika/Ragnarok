@@ -176,7 +176,7 @@ def main(argv=None) -> None:
         elif cmd == "approvals":
             if args.acmd == "list":
                 for x in rt.approvals.pending(): print(x["id"], x["skill"], json.dumps(x["args"]))
-            elif args.acmd == "grant": print(rt.approvals.grant(args.id))
+            elif args.acmd == "grant": print(rt.run_approval(args.id))
             else: print(rt.approvals.reject(args.id))
     except OllamaError as e:
         print(f"\nragnarok: {e}", file=sys.stderr)

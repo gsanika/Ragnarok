@@ -7,12 +7,27 @@ import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from .llm import OllamaError
 from .runtime import Runtime
 
 PAGE = (Path(__file__).parent / "ui.html").read_text(encoding="utf-8") if (Path(__file__).parent / "ui.html").exists() else "<h1>ui.html missing</h1>"
 
 
 def make_handler(rt: Runtime, token: str):
+    def guarded(fn):
+        """A failing model call or bug must come back as a JSON error, never a dead request."""
+        def wrapper(self):
+            try:
+                fn(self)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            except OllamaError as e:
+                self._send(503, {"error": str(e)})
+            except Exception as e:
+                rt.agent.log.record("ui_error", path=self.path, error=repr(e))
+                self._send(500, {"error": f"{type(e).__name__}: {e}"})
+        return wrapper
+
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a): pass
 
@@ -20,7 +35,9 @@ def make_handler(rt: Runtime, token: str):
             data = body.encode() if isinstance(body, str) else json.dumps(body, default=str).encode()
             self.send_response(code); self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data))); self.send_header("Cache-Control", "no-store")
-            self.end_headers(); self.wfile.write(data)
+            self.end_headers()
+            try: self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError): pass
 
         def _guard(self) -> bool:
             host = (self.headers.get("Host") or "").split(":")[0]
@@ -36,6 +53,7 @@ def make_handler(rt: Runtime, token: str):
             n = int(self.headers.get("Content-Length") or 0)
             return json.loads(self.rfile.read(n) or b"{}") if n else {}
 
+        @guarded
         def do_GET(self):
             if not self._guard(): return
             if self.path.startswith("/?") or self.path == "/":
@@ -50,6 +68,7 @@ def make_handler(rt: Runtime, token: str):
                 return self._send(200, {"text": rt.brief()})
             self._send(404, {"error": "not found"})
 
+        @guarded
         def do_POST(self):
             if not self._guard(): return
             b = self._body()
@@ -63,10 +82,14 @@ def make_handler(rt: Runtime, token: str):
                 rt.memory.wipe(); return self._send(200, {"ok": True})
             if self.path.startswith("/api/approvals/"):
                 _, _, _, aid, action = self.path.split("/")
-                ok = rt.approvals.grant(aid) if action == "grant" else rt.approvals.reject(aid)
-                return self._send(200, {"ok": ok})
+                if action == "grant":
+                    if rt.approvals.get(aid) is None:
+                        return self._send(200, {"ok": False})
+                    return self._send(200, {"ok": True, "result": rt.run_approval(aid)})   # approving runs it
+                return self._send(200, {"ok": rt.approvals.reject(aid)})
             self._send(404, {"error": "not found"})
 
+        @guarded
         def do_PUT(self):
             if not self._guard(): return
             if self.path.startswith("/api/memory/"):
@@ -74,6 +97,7 @@ def make_handler(rt: Runtime, token: str):
                 return self._send(200, {"ok": True})
             self._send(404, {"error": "not found"})
 
+        @guarded
         def do_DELETE(self):
             if not self._guard(): return
             if self.path.startswith("/api/memory/"):

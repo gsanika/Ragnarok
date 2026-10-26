@@ -62,12 +62,12 @@ def test_goal_plan_executes_end_to_end(rt):
 
 
 def test_risky_action_blocked_until_approved(rt):
-    assert "did not approve" in rt.chat("send the email")
+    assert "approval" in rt.chat("send the email")
     pending = rt.approvals.pending()
     assert len(pending) == 1 and pending[0]["skill"] == "send_email"
-    rt.approvals.grant(pending[0]["id"])
-    rt.chat("send the email")      # now allowed once (fails on missing SMTP, but is executed)
-    assert any(e["event"] == "tool_result" and e["skill"] == "send_email" for e in rt.agent.log.read())
+    result = rt.run_approval(pending[0]["id"])          # approving runs the queued action itself
+    assert "SMTP not configured" in result              # executed (no SMTP in the test env)
+    assert any(e["event"] == "approved_action" and e["skill"] == "send_email" for e in rt.agent.log.read())
 
 
 def test_viewer_role_cannot_use_email(tmp_path):

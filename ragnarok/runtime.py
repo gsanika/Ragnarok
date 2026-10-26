@@ -21,7 +21,7 @@ from .memory_skills import register_memory_skills
 from .permissions import ApprovalStore, Policy
 from .planner import Orchestrator, Plan, make_plan
 from .proactive import morning_brief
-from .skills import registry
+from .skills import normalize_args, registry
 from .triggers import DailyTrigger, EmailTrigger, FileWatchTrigger, TriggerRunner
 
 BRIEF, CONSOLIDATE = "__morning_brief__", "__consolidate__"
@@ -52,11 +52,13 @@ class Runtime:
         self.approve = interactive_approval or self.approvals.check
         self.router = SkillRouter(registry, self.embedder)
         self.agent = Agent(self.llm, registry, self.config, approve=self.approve, memory=self.memory,
-                           policy=self.policy, restore=True, router=self.router)
+                           policy=self.policy, restore=True, router=self.router,
+                           deferred_approvals=interactive_approval is None)
         self.orchestrator = Orchestrator(self.llm, self._execute_task, self.config.data_dir,
                                          notify=self.notify, log=self.agent.log)
         self.runner: TriggerRunner | None = None
         self._lock = threading.RLock()   # one conversation at a time (daemon, UI and CLI share the agent)
+        self._notes: list[str] = []      # things that happened outside the chat (e.g. approved actions)
 
     # ---- helpers
     def notify(self, text: str) -> None:
@@ -67,7 +69,8 @@ class Runtime:
 
     def _execute_task(self, prompt: str, context: dict[str, str]) -> str:
         sub = Agent(self.llm, self.registry, self.config, approve=self.approve, memory=None,
-                    policy=self.policy, router=self.router)
+                    policy=self.policy, router=self.router,
+                    deferred_approvals=self.agent.deferred_approvals)
         sub.state_path = self.config.data_dir / "state_subtask.json"
         ctx = "\n".join(f"Result of {k}: {v[:800]}" for k, v in context.items())
         return sub.run((f"Context from earlier steps:\n{ctx}\n\n" if ctx else "") + prompt)
@@ -75,10 +78,39 @@ class Runtime:
     # ---- public API
     def chat(self, text: str) -> str:
         with self._lock:
+            self._flush_notes()
             return self.agent.run(text)
+
+    def _flush_notes(self) -> None:
+        if self._notes:
+            while self._notes:
+                self.agent.history.append({"role": "system", "content": self._notes.pop(0)})
+            self.agent.save_state()
+
+    def run_approval(self, approval_id: str) -> str:
+        """The user approved a queued action: run exactly that call, once, right now."""
+        entry = self.approvals.take(approval_id)
+        if entry is None:
+            return "error: that request is no longer pending."
+        name, skill = entry["skill"], self.registry.get(entry["skill"])
+        if skill is None or not self.policy.allows(name):
+            return f"error: '{name}' is not available."
+        try:
+            result = str(skill.func(**normalize_args(skill, entry["args"])))
+        except Exception as e:
+            result = f"error: {e!r}"
+        self.agent.log.record("approved_action", skill=name, args=entry["args"], result=result[:2000])
+        self.memory.log_episode("action", f"User approved and Ragnarok ran {name} {json.dumps(entry['args'], default=str)[:300]} -> {result[:300]}")
+        self._notes.append(f"The user approved your earlier request to run '{name}' and it was executed. Result: {result[:500]}")
+        if self._lock.acquire(blocking=False):          # don't wait for a long chat in progress
+            try: self._flush_notes()
+            finally: self._lock.release()
+        self.notify(f"Approved action '{name}': {result[:200]}")
+        return result
 
     def _chat_untrusted(self, task: str) -> str:
         with self._lock:
+            self._flush_notes()
             saved = self.agent.policy
             self.agent.policy = Policy("viewer")          # read-only while handling outside text
             try:
@@ -124,9 +156,10 @@ class Runtime:
 
     def start_daemon(self, poll_seconds: float = 5.0, brief_at: str = "08:00", maintenance_at: str = "03:00") -> TriggerRunner:
         inbox = self.config.data_dir / "inbox"; inbox.mkdir(exist_ok=True)
+        state = self.config.data_dir / "trigger_state.json"      # so a restart does not repeat today's brief
         triggers = [
-            DailyTrigger("morning-brief", brief_at, BRIEF),
-            DailyTrigger("memory-maintenance", maintenance_at, CONSOLIDATE),
+            DailyTrigger("morning-brief", brief_at, BRIEF, state),
+            DailyTrigger("memory-maintenance", maintenance_at, CONSOLIDATE, state),
             FileWatchTrigger("inbox-folder", inbox, "A file changed in my inbox folder: {path}. Take a look and tell me what it is."),
         ]
         fetchers = list(self.mail_fetchers.values()) + ([imap_fetch_unseen] if os.environ.get("IMAP_HOST") else [])

@@ -18,9 +18,10 @@ class LLM(Protocol):
 
 
 class OllamaClient:
-    def __init__(self, config: Config | None = None, timeout: float = 300.0):
+    def __init__(self, config: Config | None = None, timeout: float | None = None):
         self.config = config or Config()
-        self._http = httpx.Client(base_url=self.config.ollama_url, timeout=timeout)
+        self.timeout = timeout or self.config.timeout
+        self._http = httpx.Client(base_url=self.config.ollama_url, timeout=httpx.Timeout(self.timeout, connect=10.0))
         self.name = f"ollama:{self.config.embed_model}"      # embedder identity (see MemoryManager)
 
     def _post(self, path: str, payload: dict, model: str) -> dict:
@@ -29,7 +30,8 @@ class OllamaClient:
         except httpx.ConnectError as e:
             raise OllamaError(f"Can't reach Ollama at {self.config.ollama_url}. Start it with `ollama serve`.") from e
         except httpx.TimeoutException as e:
-            raise OllamaError("Ollama timed out. The model may still be loading; try again.") from e
+            raise OllamaError(f"Ollama did not answer within {int(self.timeout)}s. The model may still be loading or is too big for this machine: "
+                              "try a smaller one (`ollama pull llama3.2:3b`, then set RAGNAROK_CHAT_MODEL) or raise RAGNAROK_TIMEOUT.") from e
         if r.status_code == 404:
             raise OllamaError(f"Model '{model}' not found. Run `ollama pull {model}`.")
         if r.status_code >= 400:
@@ -44,13 +46,14 @@ class OllamaClient:
 
     def chat(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
         """Returns the assistant message dict: {role, content, tool_calls?}."""
-        payload: dict[str, Any] = {"model": self.config.chat_model, "messages": messages, "stream": False}
+        payload: dict[str, Any] = {"model": self.config.chat_model, "messages": messages, "stream": False,
+                                   "keep_alive": self.config.keep_alive}
         if tools:
             payload["tools"] = tools
         return self._post("/api/chat", payload, self.config.chat_model)["message"]
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        return self._post("/api/embed", {"model": self.config.embed_model, "input": texts},
+        return self._post("/api/embed", {"model": self.config.embed_model, "input": texts, "keep_alive": self.config.keep_alive},
                           self.config.embed_model)["embeddings"]
 
     def status(self) -> dict:

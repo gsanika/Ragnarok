@@ -33,13 +33,15 @@ def atomic_write_json(path: Path, data) -> None:
 class Agent:
     def __init__(self, llm: LLM, registry: SkillRegistry, config: Config | None = None,
                  approve: Callable[[str, dict], bool] = always_deny, memory=None,
-                 policy=None, restore: bool = False, router=None):
+                 policy=None, restore: bool = False, router=None,
+                 deferred_approvals: bool = False):
         self.llm, self.registry = llm, registry
         self.config = config or Config()
         self.approve = approve
         self.memory = memory            # MemoryManager | None
         self.policy = policy            # permissions.Policy | None
         self.router = router            # intent.SkillRouter | None
+        self.deferred_approvals = deferred_approvals  # True: risky calls are queued for the UI instead of asked inline
         self.log = ExecutionLog(self.config.log_path)
         self.state_path = self.config.data_dir / "state.json"
         self.history: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -78,6 +80,11 @@ class Agent:
             self.log.record("blocked_by_role", skill=name, role=self.policy.role)
             return f"error: role '{self.policy.role}' may not use '{name}'"
         if skill.risky and not self.approve(name, args):
+            if self.deferred_approvals:
+                self.log.record("approval_pending", skill=name, args=args)
+                return ("PENDING: this action needs the user's approval and has NOT been done yet. It is queued in the Ragnarok UI "
+                        "(Pending approvals) and will run automatically once approved. Do not call it again; tell the user it is "
+                        "waiting for their approval.")
             self.log.record("denied", skill=name, args=args)
             return "error: user did not approve this action"
         try:

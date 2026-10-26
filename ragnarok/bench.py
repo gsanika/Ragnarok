@@ -47,6 +47,7 @@ def run(embedder: Embedder | None = None, n_facts: int = 2000, queries: int = 50
             t = time.perf_counter(); mem.recall(f"what about the {topics[q % 10]} deadline"); lat.append((time.perf_counter() - t) * 1000)
         # intent classification
         router = SkillRouter(registry, embedder)
+        router.top("warmup", k=6)
         ilat = []
         for q in range(queries):
             t = time.perf_counter(); router.top(f"please check my {topics[q % 10]} and schedule it", k=6); ilat.append((time.perf_counter() - t) * 1000)

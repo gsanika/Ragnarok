@@ -126,6 +126,8 @@ ragnarok connect microsoft     # shows a code to enter at microsoft.com/devicelo
 ```
 `ragnarok connections` lists linked accounts, `ragnarok disconnect google|microsoft` removes them (Google tokens are also revoked). Restart the daemon after connecting. Tokens are stored encrypted with your memory key. Connected mailboxes feed the always-on email trigger under the same read-only, quoted-as-data protection as IMAP.
 
+**Approvals:** risky actions (sending mail, deleting notes, running code) are queued. Clicking *Approve* in the UI (or `ragnarok approvals grant ID`) runs exactly the action you reviewed, once; the agent is told it is pending, never that it was sent.
+
 **Safety:** text arriving from outsiders (email subjects, files dropped in `data/inbox/`) is quoted as data and handled under the read-only `viewer` role, so a malicious email can't make the agent send mail or delete anything.
 
 ## Honest limitations
