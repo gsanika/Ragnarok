@@ -126,6 +126,8 @@ ragnarok connect microsoft     # shows a code to enter at microsoft.com/devicelo
 ```
 `ragnarok connections` lists linked accounts, `ragnarok disconnect google|microsoft` removes them (Google tokens are also revoked). Restart the daemon after connecting. Tokens are stored encrypted with your memory key. Connected mailboxes feed the always-on email trigger under the same read-only, quoted-as-data protection as IMAP.
 
+**Which data folder?** By default Ragnarok keeps its data in `./data` of the folder you run it from, so `setup-email` and the daemon must run from the same folder. To pin it for every terminal, set `RAGNAROK_HOME` once (Windows: `setx RAGNAROK_HOME "C:\\path\\to\\ragnarok\\data"`, then open a new terminal). `ragnarok doctor` prints the folder in use.
+
 **Email setup (once):** run `ragnarok setup-email`. It asks for your address and app password (hidden), saves them encrypted next to your memory, and sends you a test email. After that every terminal, the daemon and the UI can send. If email isn't set up, the agent says so immediately instead of queuing an approval that can't work.
 
 **Honest replies:** whenever a risky action is waiting, declined or failed, Ragnarok replaces the model's wording with a plain status line, so a small model can't claim it sent something it didn't. `ragnarok --version` shows what you're running; `ragnarok reset-chat` clears a saved conversation that contains old wrong answers.

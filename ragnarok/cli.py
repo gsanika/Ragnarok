@@ -26,6 +26,8 @@ def _doctor() -> int:
     from .llm import OllamaClient
     from .sandbox import docker_available
     cfg, bad = Config(), 0
+    print(f"  Ragnarok v{__version__}")
+    print(f"  data folder: {cfg.data_dir.resolve()}   (commands only see the data folder of the folder you run them from, unless RAGNAROK_HOME is set)")
     def line(ok, msg, hint=""):
         nonlocal bad
         bad += 0 if ok else 1
@@ -49,7 +51,12 @@ def _doctor() -> int:
         print("  info key file will be created on first run (back it up, or set RAGNAROK_PASSPHRASE)")
     from .integrations import smtp_settings
     s = smtp_settings(cfg.data_dir)
-    print(f"  ok   email sending is set up ({s['user']})" if s else "  info email not set up: run `ragnarok setup-email` once")
+    if s:
+        print(f"  ok   email sending is set up ({s['user']})")
+    elif (cfg.data_dir / "credentials.enc").exists():
+        print("  FAIL a saved email login exists but cannot be read (different RAGNAROK_PASSPHRASE or key file?)"); bad += 1
+    else:
+        print("  info email not set up in this data folder: run `ragnarok setup-email` here once")
     print("  " + ("ok   " if docker_available() else "info ") + "docker " + ("available: sandbox will use it (no network)" if docker_available() else "not available: sandbox uses process limits only"))
     try:
         import numpy  # noqa: F401
@@ -133,7 +140,7 @@ def main(argv=None) -> None:
             if not user or not pw:
                 print("Cancelled."); sys.exit(1)
             CredentialStore(cfg.data_dir).put("smtp", {"host": args.host, "port": args.port, "user": user, "password": pw})
-            print("Saved (encrypted). Sending a test email to yourself...")
+            print(f"Saved (encrypted) in {cfg.data_dir.resolve()}. Run Ragnarok from this same folder, or pin it (see README).\nSending a test email to yourself...")
             to = user
         else:
             s = smtp_settings(cfg.data_dir)
@@ -159,7 +166,7 @@ def main(argv=None) -> None:
     try:
         rt = _runtime(interactive=cmd in ("chat", "do"), role=args.role, offline=args.offline_embeddings)
         if cmd == "chat":
-            print(f"Ragnarok v{__version__} ready (model: {rt.config.chat_model}, role: {rt.policy.role}). Ctrl-D to quit.")
+            print(f"Ragnarok v{__version__} ready (model: {rt.config.chat_model}, role: {rt.policy.role}, data: {rt.config.data_dir.resolve()}). Ctrl-D to quit.")
             try:
                 while True:
                     t = input("you> ").strip()
@@ -177,7 +184,7 @@ def main(argv=None) -> None:
             print(rt.brief())
         elif cmd == "daemon":
             rt.start_daemon(args.poll, args.brief_at, args.maintenance_at)
-            print(f"Ragnarok v{__version__} daemon running. Ctrl-C to stop. Notifications: data/notifications.jsonl")
+            print(f"Ragnarok v{__version__} daemon running. Data folder: {rt.config.data_dir.resolve()}\nCtrl-C to stop. Notifications: {rt.config.data_dir / 'notifications.jsonl'}")
             if args.ui:
                 from .server import serve
                 serve(rt, args.port)

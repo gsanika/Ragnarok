@@ -97,11 +97,11 @@ def register_integrations(reg: SkillRegistry, data_dir: Path) -> None:
         return "\n".join(f"{s} — {f}" for _, s, f in msgs) or "no unread email (or IMAP not configured)"
 
     @reg.register(description="Send an email. Requires the user's approval.", risky=True,
-                  precheck=lambda: None if smtp_settings(data_dir) else SMTP_HELP)
+                  precheck=lambda: None if smtp_settings(data_dir) else f"{SMTP_HELP} [looking in data folder: {Path(data_dir).resolve()}]")
     def send_email(to: str, subject: str, body: str) -> str:
         cfg = smtp_settings(data_dir)
         if not cfg:
-            return SMTP_HELP
+            return f"{SMTP_HELP} [looking in data folder: {Path(data_dir).resolve()}]"
         host, user, pw = cfg["host"], cfg["user"], cfg["password"]
         msg = EmailMessage(); msg["From"], msg["To"], msg["Subject"] = user, to, subject; msg.set_content(body)
         port = int(cfg.get("port") or 465)

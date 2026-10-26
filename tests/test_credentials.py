@@ -50,7 +50,7 @@ def test_agent_refuses_to_queue_unsendable_email(tmp_path):
     rt = Runtime(Config(data_dir=tmp_path), llm=MailLLM(), embedder=HashEmbedder())
     try:
         out = rt.chat("send an email to a@b.c")
-        assert "setup-email" in out and rt.approvals.pending() == []                   # nothing for the user to approve in vain
+        assert "setup-email" in out and str(tmp_path.resolve()) in out and rt.approvals.pending() == []                   # nothing for the user to approve in vain
         assert any(e["event"] == "precheck_failed" for e in rt.agent.log.read())
         CredentialStore(tmp_path).put("smtp", {"host": "h", "user": "u@x", "password": "p"})
         rt.chat("send an email to a@b.c")                                                # now it can be queued
