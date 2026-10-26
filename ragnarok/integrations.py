@@ -26,17 +26,35 @@ def _safe(base: Path, name: str) -> Path:
     return p
 
 
-def imap_fetch_unseen(limit: int = 10) -> list[tuple[str, str, str]]:
-    host, user, pw = os.environ.get("IMAP_HOST"), os.environ.get("IMAP_USER"), os.environ.get("IMAP_PASSWORD")
-    if not (host and user and pw):
+IMAP_FOR_SMTP = {"smtp.gmail.com": "imap.gmail.com", "smtp-mail.outlook.com": "outlook.office365.com",
+                 "smtp.office365.com": "outlook.office365.com", "smtp.mail.yahoo.com": "imap.mail.yahoo.com"}
+
+
+def imap_settings(data_dir: Path | None = None) -> dict | None:
+    """Reading mail reuses the login saved by `ragnarok setup-email` for known providers; IMAP_* env vars override."""
+    cfg: dict = {}
+    if data_dir is not None:
+        smtp = smtp_settings(data_dir)
+        if smtp and IMAP_FOR_SMTP.get(smtp["host"]):
+            cfg = {"host": IMAP_FOR_SMTP[smtp["host"]], "user": smtp["user"], "password": smtp["password"]}
+    for k in ("host", "user", "password", "port"):
+        v = os.environ.get("IMAP_" + k.upper())
+        if v:
+            cfg[k] = v
+    return cfg if all(cfg.get(k) for k in ("host", "user", "password")) else None
+
+
+def imap_fetch_unseen(limit: int = 10, data_dir: Path | None = None) -> list[tuple[str, str, str]]:
+    """Unread mail as (uid, subject, sender). Headers only, read-only mailbox: nothing is ever marked as read."""
+    cfg = imap_settings(data_dir)
+    if not cfg:
         return []
     out = []
-    port = int(os.environ.get("IMAP_PORT", "993"))
-    with imaplib.IMAP4_SSL(host, port) as m:
-        m.login(user, pw); m.select("INBOX", readonly=True)
-        _, data = m.search(None, "UNSEEN")
+    with imaplib.IMAP4_SSL(cfg["host"], int(cfg.get("port") or 993)) as m:
+        m.login(cfg["user"], cfg["password"].strip()); m.select("INBOX", readonly=True)
+        _, data = m.uid("search", None, "UNSEEN")          # UIDs stay stable when mail arrives or is deleted
         for uid in data[0].split()[-limit:]:
-            _, msg = m.fetch(uid, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)])")
+            _, msg = m.uid("fetch", uid, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)])")
             h = email.message_from_bytes(msg[0][1])
             out.append((uid.decode(), str(make_header(decode_header(h.get("Subject", "")))), h.get("From", "")))
     return out
@@ -60,6 +78,36 @@ def smtp_settings(data_dir: Path) -> dict | None:
     return cfg if all(cfg.get(k) for k in ("host", "user", "password")) else None
 
 
+def _when(s: str) -> str:
+    """Accept what a model may send ('2026-10-27 15:00', '...T15:00:00Z', '2026-10-27') and store YYYY-MM-DDTHH:MM local."""
+    t = s.strip().replace("Z", "+00:00")
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", t):
+        t += "T00:00"
+    elif re.match(r"\d{4}-\d{2}-\d{2} \d", t):
+        t = t.replace(" ", "T", 1)
+    try:
+        d = dt.datetime.fromisoformat(t)
+    except ValueError:
+        raise ValueError(f"'{s}' is not a date/time; use YYYY-MM-DDTHH:MM, e.g. 2026-10-27T15:00") from None
+    if d.tzinfo:
+        d = d.astimezone().replace(tzinfo=None)
+    return d.strftime("%Y-%m-%dT%H:%M")
+
+
+def _day(s: str) -> str:
+    if not s:
+        return ""
+    try:
+        return dt.date.fromisoformat(s.strip()[:10]).isoformat()
+    except ValueError:
+        raise ValueError(f"'{s}' is not a date; use YYYY-MM-DD") from None
+
+
+def _span(e: dict) -> tuple[dt.datetime, dt.datetime]:
+    s = dt.datetime.fromisoformat(e["start"])
+    return s, (dt.datetime.fromisoformat(e["end"]) if e.get("end") else s + dt.timedelta(hours=1))
+
+
 def register_integrations(reg: SkillRegistry, data_dir: Path) -> None:
     data_dir = Path(data_dir)
     notes = data_dir / "notes"; notes.mkdir(parents=True, exist_ok=True)
@@ -80,21 +128,53 @@ def register_integrations(reg: SkillRegistry, data_dir: Path) -> None:
     def _events() -> list[dict]:
         return json.loads(cal.read_text()) if cal.exists() else []
 
-    @reg.register(description="Add a calendar event. start and end are ISO like 2026-10-26T15:00.")
+    def _save_events(evs: list[dict]) -> None:
+        cal.write_text(json.dumps(evs, indent=2))
+
+    @reg.register(description="Add a calendar event. start and end like 2026-10-27T15:00 (24-hour); end defaults to one hour later.")
     def add_event(title: str, start: str, end: str = "") -> str:
-        dt.datetime.fromisoformat(start)
-        ev = _events() + [{"title": title, "start": start, "end": end}]
-        cal.write_text(json.dumps(sorted(ev, key=lambda e: e["start"]), indent=2)); return "event added"
+        new = {"title": title, "start": _when(start), "end": _when(end) if end else ""}
+        ns, ne = _span(new)
+        if ne <= ns:
+            raise ValueError("the event must end after it starts")
+        existing = _events()
+        clashes = [x for x in existing if ns < _span(x)[1] and _span(x)[0] < ne]
+        _save_events(sorted(existing + [new], key=lambda x: x["start"]))
+        msg = f"event added: {title} at {new['start'].replace('T', ' ')}"
+        if clashes:
+            msg += "; note: it overlaps with " + ", ".join(f"'{x['title']}' ({x['start'].replace('T', ' ')})" for x in clashes)
+        return msg
 
-    @reg.register(description="List calendar events on a date (YYYY-MM-DD), or all upcoming if empty.")
+    @reg.register(description="List calendar events on a date (YYYY-MM-DD), or all upcoming events if no date is given.")
     def list_events(date: str = "") -> str:
-        evs = [e for e in _events() if (e["start"].startswith(date) if date else e["start"] >= dt.datetime.now().isoformat())]
-        return "\n".join(f"{e['start']}  {e['title']}" for e in evs) or "no events"
+        day = _day(date)
+        now = dt.datetime.now().strftime("%Y-%m-%dT%H:%M")
+        evs = [e for e in _events() if (e["start"].startswith(day) if day else e["start"] >= now)]
+        return "\n".join(f"{e['start'].replace('T', ' ')}  {e['title']}" for e in evs) or (f"no events on {day}" if day else "no upcoming events")
 
-    @reg.register(description="Check the inbox for unread emails (subjects and senders only).")
+    @reg.register(description="Delete calendar event(s) by title; give the date (YYYY-MM-DD) if several share the title. Requires approval.", risky=True)
+    def delete_event(title: str, date: str = "") -> str:
+        day, evs = _day(date), _events()
+        hit = [e for e in evs if e["title"].lower() == title.strip().lower() and (not day or e["start"].startswith(day))]
+        if not hit:
+            return f"error: no event called '{title}'" + (f" on {day}" if day else "")
+        if len(hit) > 1 and not day:
+            return "error: several events have that title; say which date (YYYY-MM-DD): " + ", ".join(e["start"][:10] for e in hit)
+        _save_events([e for e in evs if e not in hit])
+        return f"deleted {len(hit)} event(s): {title}"
+
+    @reg.register(description="Check the inbox for unread emails (sender and subject only).")
     def check_email() -> str:
-        msgs = imap_fetch_unseen()
-        return "\n".join(f"{s} — {f}" for _, s, f in msgs) or "no unread email (or IMAP not configured)"
+        if not imap_settings(data_dir):
+            return ("error: reading email is not set up. Run `ragnarok setup-email` (Gmail/Outlook), or set IMAP_HOST, "
+                    f"IMAP_USER and IMAP_PASSWORD. [looking in data folder: {data_dir.resolve()}]")
+        try:
+            msgs = imap_fetch_unseen(data_dir=data_dir)
+        except imaplib.IMAP4.error:
+            return "error: the mail server rejected the login. Use an app password and make sure IMAP is enabled for the account."
+        except OSError as e:
+            return f"error: could not reach the mail server ({type(e).__name__}: {e})."
+        return "\n".join(f"{s} - {f}" for _, s, f in msgs) or "no unread email"
 
     @reg.register(description="Send an email. Requires the user's approval.", risky=True,
                   precheck=lambda: None if smtp_settings(data_dir) else f"{SMTP_HELP} [looking in data folder: {Path(data_dir).resolve()}]")
@@ -143,8 +223,7 @@ def register_tasks(reg: SkillRegistry, data_dir: Path) -> None:
 
     @reg.register(description="Add a to-do task. project and due (YYYY-MM-DD) are optional.")
     def add_task(title: str, project: str = "", due: str = "") -> str:
-        if due:
-            dt.date.fromisoformat(due)
+        due = _day(due)
         t = load(); tid = uuid.uuid4().hex[:6]
         t.append({"id": tid, "title": title, "project": project, "due": due, "done": False}); save(t)
         return f"task {tid} added"

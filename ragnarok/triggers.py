@@ -79,9 +79,11 @@ class EmailTrigger(Trigger):
     """Polls for unseen mail. `fetch` returns [(uid, subject, sender)] and is injected so the
     trigger can be tested (and so IMAP credentials stay in integrations.py)."""
     def __init__(self, name: str, fetch: Callable[[], list[tuple[str, str, str]]],
-                 task_template: str = "Triage new email from {sender}: {subject}", every: float = 60):
+                 task_template: str = "Triage new email from {sender}: {subject}", every: float = 60,
+                 notify_existing: bool = False):
         self.name, self.fetch, self.tpl, self.every = name, fetch, task_template, every
         self._last, self._seen = 0.0, set()
+        self._primed = notify_existing      # first poll only records the current unread backlog
 
     def poll(self, now):
         if now - self._last < self.every:
@@ -90,7 +92,10 @@ class EmailTrigger(Trigger):
         out = []
         for uid, subject, sender in self.fetch():
             if uid not in self._seen:
-                self._seen.add(uid); out.append(self.tpl.format(sender=sender, subject=subject))
+                self._seen.add(uid)
+                if self._primed:
+                    out.append(self.tpl.format(sender=sender, subject=subject))
+        self._primed = True
         return out
 
 

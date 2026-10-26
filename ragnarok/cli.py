@@ -77,7 +77,7 @@ def main(argv=None) -> None:
     d = sub.add_parser("do", help="plan and execute a multi-step goal"); d.add_argument("goal")
     sub.add_parser("brief", help="print the morning brief")
     dm = sub.add_parser("daemon", help="always-on mode: triggers, daily brief, memory maintenance")
-    dm.add_argument("--ui", action="store_true", help="also serve the web UI"); dm.add_argument("--port", type=int, default=8765)
+    dm.add_argument("--ui", action="store_true", help="also serve the web UI"); dm.add_argument("--watch-email", action="store_true", help="triage NEW unread email as it arrives"); dm.add_argument("--port", type=int, default=8765)
     dm.add_argument("--poll", type=float, default=5.0); dm.add_argument("--brief-at", default="08:00"); dm.add_argument("--maintenance-at", default="03:00")
     u = sub.add_parser("ui", help="local web UI (memory, approvals, chat, log)"); u.add_argument("--port", type=int, default=8765)
     m = sub.add_parser("memory", help="view / edit / export / delete memories")
@@ -96,6 +96,9 @@ def main(argv=None) -> None:
     se = sub.add_parser("setup-email", help="save your email login once (encrypted) so sending works in every terminal")
     se.add_argument("--host", default="smtp.gmail.com"); se.add_argument("--port", type=int, default=465); se.add_argument("--user", default="")
     mt = sub.add_parser("mailtest", help="send a test email to yourself using the SMTP_* settings"); mt.add_argument("--to", default="")
+    stp = sub.add_parser("selftest", help="check every integration for real on this machine (non-destructive)")
+    stp.add_argument("--send-mail", action="store_true", help="also send one real test email to yourself")
+    stp.add_argument("--model", action="store_true", help="also check that your Ollama model calls the right tools (takes a few minutes)")
     sub.add_parser("reset-chat", help="forget the saved conversation (long-term memory stays); stop the daemon first")
     sub.add_parser("doctor", help="check Ollama, models, key file, sandbox and optional extras")
     b = sub.add_parser("bench", help="benchmark the non-functional requirements"); b.add_argument("--ollama", action="store_true"); b.add_argument("--facts", type=int, default=2000)
@@ -150,6 +153,24 @@ def main(argv=None) -> None:
             "error: SMTP not configured. Run `ragnarok setup-email` once."
         print(out); sys.exit(0 if out.startswith("sent") else 1)
 
+    if cmd == "selftest":
+        from . import selftest as st
+        cfg = Config()
+        print(f"Ragnarok v{__version__} selftest. Data folder: {cfg.data_dir.resolve()}\n")
+        checks = st.integration_checks(cfg.data_dir, send_mail=args.send_mail)
+        print(st.render(checks))
+        if args.model:
+            print(f"\nModel check ({cfg.chat_model}): one model call per prompt, this can take a few minutes on a slow machine...")
+            mc = st.model_checks()
+            print(st.render(mc))
+            if len(mc) > 1:
+                good = sum(c.status == st.PASS for c in mc)
+                print(f"\nThe model picked the right tool with correct arguments in {good}/{len(mc)} cases."
+                      + ("" if good >= len(mc) - 1 else " Expect misses below that: try a larger model such as qwen2.5:7b or llama3.1:8b (set RAGNAROK_CHAT_MODEL)."))
+            checks += mc
+        print("\n" + st.summary(checks))
+        sys.exit(1 if any(c.status == st.FAIL for c in checks) else 0)
+
     if cmd == "reset-chat":
         cfg, n = Config(), 0
         for f in ("state.json", "state_subtask.json"):
@@ -183,7 +204,7 @@ def main(argv=None) -> None:
         elif cmd == "brief":
             print(rt.brief())
         elif cmd == "daemon":
-            rt.start_daemon(args.poll, args.brief_at, args.maintenance_at)
+            rt.start_daemon(args.poll, args.brief_at, args.maintenance_at, watch_email=args.watch_email)
             print(f"Ragnarok v{__version__} daemon running. Data folder: {rt.config.data_dir.resolve()}\nCtrl-C to stop. Notifications: {rt.config.data_dir / 'notifications.jsonl'}")
             if args.ui:
                 from .server import serve

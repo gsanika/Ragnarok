@@ -19,9 +19,10 @@ def test_imap_reads_headers_only_and_readonly(monkeypatch):
         def __exit__(self, *a): pass
         def login(self, u, p): pass
         def select(self, box, readonly=False): assert readonly is True
-        def search(self, *a): return "OK", [b"7"]
-        def fetch(self, uid, spec):
-            assert "BODY.PEEK" in spec           # must not mark mail as read
+        def uid(self, cmd, *a):
+            if cmd == "search":
+                return "OK", [b"7"]
+            assert "BODY.PEEK" in a[1]           # must not mark mail as read
             m = EmailMessage(); m["Subject"] = "Hi"; m["From"] = "a@b.c"; return "OK", [(b"", m.as_bytes())]
     monkeypatch.setattr(imaplib, "IMAP4_SSL", F)
     monkeypatch.setenv("IMAP_HOST", "h"); monkeypatch.setenv("IMAP_USER", "u"); monkeypatch.setenv("IMAP_PASSWORD", "p")

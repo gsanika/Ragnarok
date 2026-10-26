@@ -26,8 +26,9 @@ def test_file_watch(tmp_path):
 
 def test_email_trigger_dedupes():
     t = EmailTrigger("e", lambda: [("1", "Hi", "bob"), ("2", "Yo", "amy")], every=0)
-    first = t.poll(1)
-    assert len(first) == 2 and t.poll(2) == []
+    assert t.poll(1) == []                    # first poll only records the existing backlog
+    t.fetch = lambda: [("1", "Hi", "bob"), ("2", "Yo", "amy"), ("3", "New!", "eve")]
+    assert t.poll(2) == ["Triage new email from eve: New!"] and t.poll(3) == []
 
 
 def test_runner_survives_broken_trigger(tmp_path):

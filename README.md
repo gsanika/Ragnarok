@@ -97,11 +97,23 @@ All run locally; nothing is sent anywhere except to your own mail server.
 
 | Area | Skills | Setup |
 |---|---|---|
-| Email (SMTP) | `check_email` (headers only, never marks read), `send_email` (needs approval); email trigger in daemon mode | `IMAP_HOST/USER/PASSWORD` (+`IMAP_PORT`), `SMTP_HOST/USER/PASSWORD` (+`SMTP_PORT`: 465 = TLS, 587 = STARTTLS). Gmail/Outlook need an *app password*. |
-| Calendar | `add_event`, `list_events`, `export_calendar`, `import_calendar` (.ics, so Google/Outlook/Apple can exchange files) | none (stored in `data/calendar.json`) |
-| Tasks / project management | `add_task`, `list_tasks`, `complete_task` | none (`data/tasks.json`) |
-| IDE / code projects (read-only) | `list_project`, `read_project_file`, `search_project`, `git_status` | `RAGNAROK_PROJECTS=/path/a:/path/b` (`;` on Windows). Nothing outside these folders is readable. |
+| Email | `check_email` (headers only, never marks mail read), `send_email` (needs approval) | `ragnarok setup-email` once (Gmail/Outlook/Yahoo app password). Other providers: `SMTP_*` / `IMAP_*` variables. |
+| Calendar (local) | `add_event` (warns about overlaps, accepts "2026-10-27 15:00"), `list_events`, `delete_event` (approval), `export_calendar` / `import_calendar` (.ics) | none (`data/calendar.json`) |
+| Tasks | `add_task`, `list_tasks`, `complete_task` | none |
+| IDE / code projects (read-only) | `list_project`, `read_project_file`, `search_project`, `git_status` | `RAGNAROK_PROJECTS=/path/a:/path/b` (`;` on Windows); nothing outside is readable |
 | Notes | `write_note`, `read_note`, `list_notes`, `delete_note` (approval) | none |
+
+The model is told the current date and time on every request, so "tomorrow at 3pm" or "due Friday" become exact dates.
+
+**Watching your inbox:** `ragnarok daemon --watch-email` triages *new* unread mail as it arrives (the backlog that was already unread when it started is ignored).
+
+**Check that everything works on your machine:**
+```
+ragnarok selftest                 # notes, calendar, tasks, email, cloud accounts, memory, sandbox, Ollama
+ragnarok selftest --send-mail     # also sends one real test email to yourself
+ragnarok selftest --model         # also checks YOUR model picks the right tool with the right arguments
+```
+Each line is PASS, FAIL or SKIP (not set up). Checks clean up after themselves; cloud accounts only get read-only calls.
 
 ### Optional cloud accounts: Google and Microsoft (opt-in, off by default)
 

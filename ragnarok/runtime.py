@@ -13,7 +13,7 @@ from .cloud.oauth import TokenStore
 from .cloud.providers import register_cloud
 from .config import Config
 from .crypto import Vault
-from .integrations import imap_fetch_unseen, register_integrations
+from .integrations import imap_fetch_unseen, imap_settings, register_integrations
 from .intent import SkillRouter
 from .llm import OllamaClient, OllamaError
 from .memory import HashEmbedder, MemoryManager, MemoryStore
@@ -98,7 +98,7 @@ class Runtime:
         try:
             result = str(skill.func(**normalize_args(skill, entry["args"])))
         except Exception as e:
-            result = f"error: {e!r}"
+            result = f"error: {type(e).__name__}: {e}"
         self.agent.log.record("approved_action", skill=name, args=entry["args"], result=result[:2000])
         self.memory.log_episode("action", f"User approved and Ragnarok ran {name} {json.dumps(entry['args'], default=str)[:300]} -> {result[:300]}")
         self._notes.append(f"The user approved your earlier request to run '{name}' and it was executed. Result: {result[:500]}")
@@ -154,7 +154,8 @@ class Runtime:
         else:
             self.notify(f"[{name}] {self.chat(task)}")
 
-    def start_daemon(self, poll_seconds: float = 5.0, brief_at: str = "08:00", maintenance_at: str = "03:00") -> TriggerRunner:
+    def start_daemon(self, poll_seconds: float = 5.0, brief_at: str = "08:00", maintenance_at: str = "03:00",
+                     watch_email: bool = False) -> TriggerRunner:
         inbox = self.config.data_dir / "inbox"; inbox.mkdir(exist_ok=True)
         state = self.config.data_dir / "trigger_state.json"      # so a restart does not repeat today's brief
         triggers = [
@@ -162,8 +163,13 @@ class Runtime:
             DailyTrigger("memory-maintenance", maintenance_at, CONSOLIDATE, state),
             FileWatchTrigger("inbox-folder", inbox, "A file changed in my inbox folder: {path}. Take a look and tell me what it is."),
         ]
-        fetchers = list(self.mail_fetchers.values()) + ([imap_fetch_unseen] if os.environ.get("IMAP_HOST") else [])
-        if fetchers:
+        fetchers = list(self.mail_fetchers.values())
+        if not fetchers and imap_settings(self.config.data_dir):
+            data_dir = self.config.data_dir
+            fetchers = [lambda: imap_fetch_unseen(data_dir=data_dir)]
+        if watch_email and not fetchers:
+            self.notify("Email watching is on but no mailbox is set up. Run `ragnarok setup-email`.")
+        if watch_email and fetchers:
             def all_mail():
                 out = []
                 for f in fetchers:

@@ -2,6 +2,7 @@
 Everything is logged (NFR4.1), working state is checkpointed (NFR3.2)."""
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 from pathlib import Path
@@ -129,18 +130,27 @@ class Agent:
             return result
         except Exception as e:  # NFR3.1: a failing tool must not crash the run
             self.log.record("tool_error", skill=name, args=args, error=repr(e))
-            self._flag(skill, "failed", repr(e))
-            return f"error: {e!r}"
+            self._flag(skill, "failed", f"{type(e).__name__}: {e}")
+            return f"error: {type(e).__name__}: {e}"
+
+    @staticmethod
+    def _now_message() -> dict:
+        """Small models don't know today's date; without this 'tomorrow 3pm' becomes a wrong calendar entry."""
+        n = dt.datetime.now().astimezone()
+        return {"role": "system", "content": (
+            f"Current date and time: {n:%A %d %B %Y, %H:%M} ({n.tzname()}, UTC{n:%z}). Use it to turn words like today, "
+            "tomorrow or Friday into exact dates (YYYY-MM-DD) and times (24-hour HH:MM) when calling tools.")}
 
     def _context_messages(self, user_text: str) -> list[dict]:
+        ctx = [self._now_message()]
         if not self.memory:
-            return []
+            return ctx
         facts = self.memory.recall(user_text, k=5)
         if not facts:
-            return []
+            return ctx
         self.log.record("memory_recall", query=user_text, facts=[f.text for f in facts])
         bullet = "\n".join(f"- {f.text}" for f in facts)
-        return [{"role": "system", "content": f"Relevant things you know about the user:\n{bullet}"}]
+        return ctx + [{"role": "system", "content": f"Relevant things you know about the user:\n{bullet}"}]
 
     def run(self, user_text: str) -> str:
         self.history.append({"role": "user", "content": user_text})
@@ -158,7 +168,7 @@ class Agent:
         reply = "I couldn't finish within the step limit."
 
         for _ in range(self.config.max_steps):
-            msg = self.llm.chat(ctx + self.history, tools=tools)
+            msg = self.llm.chat(self.history[:1] + ctx + self.history[1:], tools=tools)
             self.history.append(msg)
             calls = msg.get("tool_calls") or []
             if not calls:
